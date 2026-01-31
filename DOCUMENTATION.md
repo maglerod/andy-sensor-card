@@ -14,8 +14,9 @@ If you enjoy my work or use any of my cards in your setup, your support means a 
 <a href="https://www.buymeacoffee.com/AndyBonde" target="_blank">
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" width="160">
 </a>
----
 
+
+---
 ## Common configuration (applies to all symbols)
 
 ### Core fields
