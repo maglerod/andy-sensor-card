@@ -4,15 +4,15 @@ Welcome to my **highly configurable** Home Assistant Lovelace card that renders 
 > Built for dashboards where “a simple icon + value” isn’t enough.
 
 
-![Preview 1_0_5](Images/fan_normal.mp4)
-![Preview 1_0_5_2](Images/heatpump.mp4)
+![Preview 1_0_5](Images/fan.png)
+![Preview 1_0_5_2](Images/heatpump.png)
 ![Preview 1_0_5_3](Images/battery_splitted_horizontal.png)
 ![Preview 1_0_5_4](Images/garagedoor_wide.png)
 ![Preview 1_0_5_5](Images/garagedppr_double.png)
-![Preview 1_0_5_6](Images/heatpump.mp4)
+![Preview 1_0_5_6](Images/fan_quick.png)
 ![Preview 1_0_5_7](Images/ibctank.png)
 ![Preview 1_0_5_8](Images/tank.png)
-![Preview 1_0_5_9](Images/fan_high.mp4)
+![Preview 1_0_5_9](Images/garagedoor_open.png)
 
 
 
