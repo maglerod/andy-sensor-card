@@ -6,6 +6,15 @@ This document describes **all symbols** and the **configuration fields** availab
 > `on/true = 1` and `off/false = 0` can be useful for “open/closed” style visuals. :contentReference[oaicite:1]{index=1}
 
 ---
+## ☕ Support the project 
+I’m a Home Automation enthusiast who spends way too many late nights building custom cards, dashboards and small tools for Home Assistant.
+I love creating clean, useful UI components and sharing them for free with the community, and I try to help others whenever I can with ideas, code and support.
+If you enjoy my work or use any of my cards in your setup, your support means a lot and helps me keep experimenting, improving and maintaining everything.
+
+<a href="https://www.buymeacoffee.com/AndyBonde" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" width="160">
+</a>
+---
 
 ## Common configuration (applies to all symbols)
 
