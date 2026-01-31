@@ -65,7 +65,7 @@ Use variables in labels, interval matched text, and badge labels:
 - [Intervals](DOCUMENTATION.md#intervals)
 - [Installation](#installation)
 - [Changelog](CHANGELOG.md)
-- [Support me :) ](#support the project)
+- [Support me :) ](#support)
 
 
 ## Installation
@@ -133,7 +133,7 @@ symbol: battery_liquid
 ```
 
 
-## ☕ Support the project 
+## ☕ Support
 I’m a Home Automation enthusiast who spends way too many late nights building custom cards, dashboards and small tools for Home Assistant.
 I love creating clean, useful UI components and sharing them for free with the community, and I try to help others whenever I can with ideas, code and support.
 If you enjoy my work or use any of my cards in your setup, your support means a lot and helps me keep experimenting, improving and maintaining everything.
