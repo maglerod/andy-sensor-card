@@ -52,7 +52,7 @@ This document describes **all symbols** and the **configuration fields** availab
 - `outline_value` *(boolean)*  
   Adds outline for better contrast.
 
-### Card sizing (v1.0.2+ in your codebase)
+### Card sizing
 - `card_scale` *(number)*  
 - `card_width` *(string; css size like `320px`, `100%`)*  
 - `card_height` *(string; css size like `180px`)* :contentReference[oaicite:5]{index=5}
@@ -145,42 +145,38 @@ This section covers:
 
 All these symbols support:
 - `min`, `max`
-- `industrial_look` (supported for tank family) 
 
 ### tank
 Classic storage tank level.
 
 **Key fields**
 - `min`, `max` – maps entity state to fill height.
-- `industrial_look` – changes casing/frame style for tank family. :contentReference[oaicite:16]{index=16}
+
 
 ### ibc_tank
 IBC container (bulk tank) level.
 
 **Key fields**
 - `min`, `max`
-- `industrial_look` – supported. 
 
 ### silo
 Vertical silo level.
 
 **Key fields**
 - `min`, `max`
-- `industrial_look` – supported. 
 
 ### gas_cylinder
 Gas cylinder level.
 
 **Key fields**
 - `min`, `max`
-- `industrial_look` – supported. 
 
 ### water_level_segments
 Segmented fill specifically for “level”.
 
 **Key fields**
 - `segment_gap` *(number)* – spacing between segments. :contentReference[oaicite:20]{index=20}
-- `industrial_look` – supported. :contentReference[oaicite:21]{index=21}
+- You decide the color and segment quantity by using intervals on main card.
 
 ---
 
