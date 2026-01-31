@@ -8,7 +8,7 @@ Welcome to my **highly configurable** Home Assistant Lovelace card that renders 
 ![Preview 1_0_5_2](Images/heatpump.png)
 ![Preview 1_0_5_3](Images/battery_splitted_horizontal.png)
 ![Preview 1_0_5_4](Images/garagedoor_wide.png)
-![Preview 1_0_5_5](Images/garagedppr_double.png)
+![Preview 1_0_5_5](Images/garagedoor_double.png)
 ![Preview 1_0_5_6](Images/fan_quick.png)
 ![Preview 1_0_5_7](Images/ibctank.png)
 ![Preview 1_0_5_8](Images/tank.png)
