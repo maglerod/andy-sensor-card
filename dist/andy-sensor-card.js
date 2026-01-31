@@ -2026,7 +2026,8 @@ _badgeSliderMeta(badge) {
 
 _badgeDragEnabled() {
   try {
-    return (this.getAttribute("data-asc-preview") === "1") && !!this._config?.badge_drag_enabled;
+    // Drag & drop is always enabled in the visual editor preview only.
+    return (this.getAttribute("data-asc-preview") === "1");
   } catch (e) {
     return false;
   }
@@ -7500,7 +7501,6 @@ if (!this._ascDragEndBound) {
       const id = String(d.id || "");
       if (!id) return;
       if (!this._config || !Array.isArray(this._config.badges)) return;
-      if (!this._config.badge_drag_enabled) return;
 
       const x = Math.max(0, Math.min(100, Number(d.x)));
       const y = Math.max(0, Math.min(100, Number(d.y)));
@@ -8229,7 +8229,7 @@ root.appendChild(rowOpt);
     const btnAdd = document.createElement("button");
     btnAdd.setAttribute("unelevated", "");
     btnAdd.classList.add("haPrimary");
-    btnAdd.innerText = "+ Add";
+    btnAdd.innerText = "+ Add interval";
     btnAdd.addEventListener("click", (e) => { e.stopPropagation(); this._startAdd(); });
     head.appendChild(btnAdd);
     secInt.appendChild(head);
@@ -8257,29 +8257,18 @@ root.appendChild(rowOpt);
     const btnBadAdd = document.createElement("button");
     btnBadAdd.setAttribute("unelevated", "");
     btnBadAdd.classList.add("haPrimary");
-    btnBadAdd.innerText = "+ Add";
+    btnBadAdd.innerText = "+ Add badge";
     btnBadAdd.addEventListener("click", (e) => { e.stopPropagation(); this._startAddBadge(); });
     badHead.appendChild(btnBadAdd);
 
-// Drag badges in preview (safe): only active in HA visual editor preview
-const dragRow = document.createElement("div");
-dragRow.className = "row";
-const dragLbl = document.createElement("div");
-dragLbl.className = "label";
-dragLbl.innerText = "Drag badges in preview (safe)";
-const dragSw = document.createElement("ha-switch");
-dragSw.className = "haSwitch";
-dragSw.checked = !!this._config.badge_drag_enabled;
-dragSw.addEventListener("change", (e) => {
-  stopBubble(e);
-  this._commit("badge_drag_enabled", !!dragSw.checked);
-});
-dragRow.appendChild(dragLbl);
-dragRow.appendChild(dragSw);
-secBad.appendChild(dragRow);
-this._elBadgeDragSwitch = dragSw;
 
-    secBad.appendChild(badHead);
+// Drag & drop badges directly in the Preview (visual editor only).
+const dragHint = document.createElement("div");
+dragHint.className = "note";
+dragHint.innerHTML = "💡 <b>Tip:</b> You can drag &amp; drop badges directly in the <b>Preview</b> to position them. This only works inside the visual editor preview.";
+secBad.appendChild(dragHint);
+
+secBad.appendChild(badHead);
 
     this._badgeList = document.createElement("div");
     this._badgeList.className = "badgeList";
@@ -8343,6 +8332,7 @@ varsHead.innerHTML = `
     const style = document.createElement("style");
     style.textContent = `
       .form { display:flex; flex-direction:column; gap:12px; padding:8px 0; overflow: visible; }
+      .note{ font-size: 12px; line-height: 1.35; opacity: 0.9; padding: 8px 10px; border-radius: 10px; background: rgba(0,0,0,0.05); border: 1px solid rgba(0,0,0,0.10);} 
       ha-entity-picker, ha-select, ha-textfield { display:block; width:100%; }
       ha-entity-picker { min-height: 56px; }
 
@@ -8746,9 +8736,6 @@ varsHead.innerHTML = `
 
     // Safety: Image options should only be visible when Symbol = Image
     const baseSymLc = String(baseSym || "").trim().toLowerCase();
-
-    try { if (this._elBadgeDragSwitch) this._elBadgeDragSwitch.checked = !!this._config.badge_drag_enabled; } catch (e) {}
-
     try { if (this._rowImage) this._rowImage.style.display = (baseSymLc === "image") ? "" : "none"; } catch(e) {}
 
     this._elEntity.hass = this._hass;
@@ -9988,7 +9975,7 @@ _applyBadgeDraftPreview() {
 
     const head = document.createElement("div");
     head.className = "draftHead";
-    head.innerHTML = `<div>${this._badgeEditingId == null ? "Add badge" : "Edit badge"}</div>`;
+    head.innerHTML = `<div>${this._badgeEditingId == null ? "Badge details (new)" : "Badge details (edit)"}</div>`;
     const btnClose = document.createElement("button");
     btnClose.setAttribute("unelevated", "");
     btnClose.classList.add("haPrimary");
