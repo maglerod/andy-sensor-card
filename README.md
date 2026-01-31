@@ -1,5 +1,5 @@
 # Andy Sensor Card - v1.0.0
-A **highly configurable** Home Assistant Lovelace card that renders **advanced SVG symbols** (garage doors, blinds, tanks, batteries, gates, fan/heatpump, images…) and lets you place **draggable badges anywhere** — with actions, images and sliders.
+Welcome to my **highly configurable** Home Assistant Lovelace card that renders **advanced SVG symbols with animations** (garage doors, blinds, tanks, batteries, gates, fan/heatpump, images…) and lets you place **badges anywhere** - with actions, images and sliders and much more.
 
 > Built for dashboards where “a simple icon + value” isn’t enough.
 
@@ -12,24 +12,25 @@ A **highly configurable** Home Assistant Lovelace card that renders **advanced S
 - **Blind** (single/double) with interior feel + optional style (persienne/lamell).
 - **Gate** (sliding / door-gate) with left/right direction.
 - **Tanks & levels**: tank, IBC tank, silo, water-level segments, gas cylinder.
-- **Batteries**: liquid, segments, split-segments (supports “industrial look” variants).
-- **Fan & Heatpump** symbols.
-- **Image** symbol with cover/contain, optional frame, tint overlay, and dim-when-off behavior.
+- **Batteries**: liquid, segments, split-segments
+- **Fan & Heatpump** symbols with animated fan, set blade count, set color on blades based on interval/speed, animation on high speed.
+- **Image** symbol with cover/contain, optional frame, tint overlay, and dim-when-off behavior. Can be used as a background together with the badge framework.
 
 ### Interval engine (colors + behavior)
-A consistent **interval framework** drives:
+A consistent **interval framework** matched by value or number up to, drives:
 - Colors / outline / gradients
 - Optional per-interval icon + icon color
-- Optional “matched label” and “value replacement”
+- Optional “matched label” and “value replacement” including variables
 - Optional `seconds` per interval (used for smooth motion/animation behavior in relevant symbols)
+- For Battery with segments, Water tank with segments, Garage door and blinds, interval are used to decide the amount of segments / panels. Each segment / panel with it's own color settings.
 
 ### Badges: place anything anywhere
-- Drag badges freely across the card
-- Multiple badge styles (solid / glass / outline / none + special styles)
+- Use X, Y buttons to position badges freely across the card
+- Multiple badge styles (solid / glass / outline / none / arrows (left,right,top,bottom), pump left, pump right, image..)
 - Badge can show:
-  - Icon or **image**
+  - Icon or **image** / Image can be dimmed when off, Icon can be colored by state or changed by interval.
   - Optional **slider** (light/cover/number/input_number supported)
-- Badge supports **tap actions**, including **call-service** with JSON data
+- Badge supports **tap actions**, including **call-service** with selected service based on domain of sensor or manual with JSON data
 
 ### Variables 
 Use variables in labels, interval matched text, and badge labels:
@@ -51,7 +52,7 @@ Use variables in labels, interval matched text, and badge labels:
 - [Intervals](DOCUMENTATION.md#intervals)
 - [Installation](#installation)
 - [Changelog](CHANGELOG.md)
-- [Support](#support)
+- [Support me :) ](#support)
 
 
 ## Installation
