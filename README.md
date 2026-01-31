@@ -116,7 +116,7 @@ Minimal example (battery):
 type: custom:andy-sensor-card
 entity: sensor.my_battery
 symbol: battery_liquid
-
+```
 
 
 ## ☕ Support the project 
