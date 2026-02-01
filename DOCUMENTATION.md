@@ -1,9 +1,16 @@
 # Andy Sensor Card — Documentation
 
-This document describes **all symbols** and the **configuration fields** available in **Andy Sensor Card*.
+This guide explains every symbol and every setting in **Andy Sensor Card** in a beginner-friendly way.
 
-> Tip: The card supports numeric sensors, but also *switch/binary* entities.  
-> `on/true = 1` and `off/false = 0` can be useful for “open/closed” style visuals. :contentReference[oaicite:1]{index=1}
+Important note:  
+This documentation uses the **exact field titles you see in the Visual Editor**.  
+For advanced users, the internal config key is shown in small text like: *(config key: `...`)*.
+
+If the card feels “very flexible” at first — that’s normal.  
+You can start simple (just pick `entity` + `symbol`) and then add power features later:
+- **Intervals** (rules for colors, segments/panels, and state matching)
+- **Badges** (movable widgets with actions, images, and sliders)
+
 
 ---
 ## ☕ Support the project 
@@ -15,455 +22,686 @@ If you enjoy my work or use any of my cards in your setup, your support means a 
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" width="160">
 </a>
 
+---
+
+## Quick concepts (read once)
+
+### What is an Entity?
+In Home Assistant, everything is an entity — sensors, lights, covers, switches, etc.
+Examples:
+- `sensor.phone_battery`
+- `cover.garage_door`
+- `light.kitchen`
+
+The card reads the entity and turns it into a visual symbol.
+
+### Why Min/Max matters
+Some entities are already 0–100 (battery %).  
+Others are not (liters, kW, cm...).  
+Min/Max tells the card what should count as “empty” and “full”.
+
+### What are Intervals?
+Intervals are the card’s rule system. They can:
+
+1) Change colors / gradients / outlines based on numeric values  
+2) Match exact states (text) like `on/off`, `open/closed`, etc.  
+3) Define how many segments/panels some symbols should have (battery segments, garage door panels, blinds sections)
+
+Intervals exist in two places and they are **separate**:
+- **Main card Intervals**: affects the main symbol only
+- **Badge Intervals**: affects only that badge (similar concept, separate list)
+
+### What are Badges?
+Badges are movable widgets placed anywhere on the card:
+- show values
+- show icons or images
+- show sliders
+- run actions on tap (toggle / more-info / call-service)
 
 ---
+
 ## Common configuration (applies to all symbols)
 
-### Core fields
-- `entity` *(string, required)*  
-  Main entity for the card.
+Below are the main settings you will see in the Visual Editor.
 
-- `name` *(string)*  
-  Card title.
+### Main Entity
+#### **Main Entity** *(config key: `entity`)*
+This is the main entity the card reads.  
+Pick the entity that represents what you want the card to show.
 
-- `symbol` *(string)*  
-  Selects what the card renders. Supported values:  
-  `battery_liquid`, `battery_segments`, `battery_splitted_segments`, `water_level_segments`, `silo`, `tank`, `ibc_tank`, `gas_cylinder`, `fan`, `heatpump`, `garage_door`, `blind`, `gate`, `image`. :contentReference[oaicite:2]{index=2}
+Examples:
+- `sensor.ev_battery`
+- `sensor.tank_liters`
+- `cover.garage_door`
 
-- `industrial_look` *(boolean)*  
-  Enables “industrial/modern” styling for supported symbols.  
-  Supported for: batteries + water level + tanks (`ibc_tank`, `tank`, `silo`, `gas_cylinder`).  
-  Not used for: `fan`, `heatpump`, `garage_door`, `blind`, `gate`. :contentReference[oaicite:3]{index=3}
+---
 
-### Value and scaling
-- `min` *(number, default 0)*  
-- `max` *(number, default 100)*  
-  Used to map entity state into a 0–100% (or min–max) visual fill/position.
+### Symbol selection
+#### **Symbol** *(config key: `symbol`)*
+Selects what the card draws.
 
-- `unit` *(string)*  
-  Optional unit string.
+Symbols in v1.0.0:
+- Batteries: `battery_liquid`, `battery_segments`, `battery_splitted_segments`
+- Containers/levels: `water_level_segments`, `tank`, `ibc_tank`, `silo`, `gas_cylinder`
+- Mechanics: `garage_door`, `blind`, `gate`
+- Other: `fan`, `heatpump`, `image`
 
-- `decimals` *(number)*  
-  Number of decimals used for formatting.
+---
 
-### Layout / look & feel
-- `orientation` *(string: `vertical` | `horizontal`)*  
-  Controls the direction for symbols that support it.
+### Naming & text placement
+#### **Name** *(config key: `name`)*
+Optional title shown on the card. Use this if your dashboard needs a clearer label.
 
-- `glass` *(boolean)*  
-  Enables “glass” overlay look for supported symbols.
+#### **Name position** *(config key: `name_position`)*
+Where the Name/title should appear on the card.
 
-- `value_position` *(string)*  
-  Controls where the value is shown (example: `top_right`). :contentReference[oaicite:4]{index=4}
+#### **Value position** *(config key: `value_position`)*
+Where the main value text should appear.
 
-- `value_font_size` *(number)*  
-  0 = auto, otherwise fixed size.
+#### **Value font size (px) — 0 = auto** *(config key: `value_font_size`)*
+Controls how large the value text is.
+- Use `0` to let the card automatically choose a good size (recommended)
+- Set a number to force a fixed size (useful for dashboards viewed from far away)
 
-- `outline_value` *(boolean)*  
-  Adds outline for better contrast.
+---
 
-### Card sizing
-- `card_scale` *(number)*  
-- `card_width` *(string; css size like `320px`, `100%`)*  
-- `card_height` *(string; css size like `180px`)* :contentReference[oaicite:5]{index=5}
+### Value formatting & scaling
+#### **Unit (optional)** *(config key: `unit`)*
+Optional unit override (for example `%`, `L`, `kWh`).  
+Tip: Home Assistant usually provides the unit automatically.
 
-### Intervals and Badges (global)
-- `intervals` *(array)*  
-  Controls colors/gradients and special behaviors for several symbols. See **Intervals**. :contentReference[oaicite:6]{index=6}
+#### **Decimals** *(config key: `decimals`)*
+How many decimal digits to show.
+- 0 = whole numbers (best for battery %)
+- 1–2 = useful for temperature, voltage, etc.
 
-- `badges` *(array)*  
-  Draggable overlay elements placed freely inside the card. See **Badges**. :contentReference[oaicite:7]{index=7}
+#### **Min (scale)** *(config key: `min`)*
+Defines what the card should treat as “0% / empty / fully closed”.
 
-### Template variables for labels (Badges + interval override text)
-You can write your own text mixed with variables (placeholders), for example:  
-`Temperature: <value>`
+Examples:
+- Tank liters 0–3000 → Min = 0
+- Temperature -20..40 → Min = -20
 
-Supported variables:
-- `<value>` formatted value (incl unit)
+#### **Max (scale)** *(config key: `max`)*
+Defines what the card should treat as “100% / full / fully open”.
+
+Examples:
+- Tank liters 0–3000 → Max = 3000
+
+---
+
+### Card size & zoom
+#### **Card scale (0.2–4.0) — 1 = default** *(config key: `card_scale`)*
+Scales the entire content (a quick “zoom”).
+- 1.0 = default
+- 0.9 = slightly smaller
+- 1.2 = larger
+
+#### **Card width (optional, e.g. 180px)** *(config key: `card_width`)*
+Forces a width. Use only if you need the card to fit perfectly in a grid.
+
+#### **Card height (optional, e.g. 220px)** *(config key: `card_height`)*
+Forces a height. Very useful for image tiles.
+
+---
+
+### Visual style toggles
+#### **Modern look** *(config key: `industrial_look`)*
+Enables a modern/industrial casing style for supported symbols (mainly batteries and tanks).
+
+#### **Glass effect** *(config key: `glass`)*
+Adds a glossy/glass overlay on supported symbols.
+
+#### **Outline value** *(config key: `outline_value`)*
+Adds an outline around the value text to improve readability (highly recommended on image backgrounds).
+
+---
+
+### Extra display options
+#### **Show scale (ticks)** *(config key: `show_scale`)*
+Shows scale marks (useful for level/tank style symbols).
+
+#### **Min/Avg/Max position** *(config key: `stats_position`)*
+Where the min/avg/max (history) text should appear.
+
+#### **Show Min/Avg/Max (history)** *(config key: `show_stats`)*
+Shows min/avg/max history summary if enabled in your card build.
+
+#### **Stats lookback hours** *(config key: `stats_hours`)*
+How many hours back the min/avg/max calculation should use.
+
+---
+
+### Orientation
+#### **Orientation** *(config key: `orientation`)*
+Controls vertical/horizontal orientation for symbols that support it.
+
+---
+
+### Tap action (main entity)
+#### **Tap action (main entity)** *(config key: `tap_action`)*
+What happens when you tap the card background (the main symbol area):
+- `more-info` (recommended) opens entity details
+- `toggle` toggles entity on/off (if supported)
+- `none` disables tapping
+
+---
+
+### Templates (placeholders in text)
+Some fields support variables like `<value>` and `<name>`.
+
+Common placeholders:
+- `<value>` formatted value (includes unit)
 - `<state>` raw state
 - `<name>` friendly name
 - `<unit>` unit
 - `<entity_id>` entity id
-- `<domain>` entity domain
-- `<last_changed>`, `<last_updated>` local time
-- `<last_changed_rel>`, `<last_updated_rel>` relative time
-- `<last_changed_iso>`, `<last_updated_iso>` ISO time
-- `<attr:xxx>` any attribute, e.g. `<attr:temperature>` :contentReference[oaicite:8]{index=8}
+- `<domain>` domain (sensor/light/cover…)
+- `<last_changed_rel>` “2 min ago”
+- `<attr:xyz>` any attribute (example: `<attr:power>`)
 
 ---
 
-## Batteries
+# Batteries
+<a id="batteries"></a>
 
 This section covers:
 - `battery_liquid`
 - `battery_segments`
 - `battery_splitted_segments`
 
-Related shared fields (battery + split battery):
-- `charging_state_entity` *(string)*  
-- `charging_power_entity` *(string)*  
-- `charging_state_entity2` *(string)*  
-- `charging_power_entity2` *(string)*  
-Used to display/animate “charging” state (split symbol can do this per side). :contentReference[oaicite:9]{index=9}
+## Battery Segments — what it is and why it’s powerful
+Battery Segments is designed to show battery status in a clean “status bar” style.
 
-### battery_liquid
-A liquid-style battery fill.
+Great for:
+- EV battery
+- phone + watch in one symbol (splitted)
+- UPS battery
+- solar storage battery
 
-**Key fields**
-- `min`, `max` – maps state to fill level.
-- `industrial_look` – enables modern casing style for supported variants. 
-- `glass` – glass overlay.
+### Single vs Splitted
+- **battery_segments** = one entity
+- **battery_splitted_segments** = two entities in one symbol (left + right)
 
-**Intervals**
-- Typically used to control fill color and outline by level (see Intervals).
+#### **Second Entity splitted symbol (Battery)** *(config key: `entity2`)*
+Only used for `battery_splitted_segments`.
+Example use-cases:
+- EV1 + EV2
+- Phone + Watch
 
-### battery_segments
-A segmented battery with discrete “blocks”.
-
-**Key fields**
-- `segment_gap` *(number)*  
-  Gap between blocks (SVG units). :contentReference[oaicite:11]{index=11}
-- `min`, `max`, `decimals`
-
-**Behavior**
-- Each segment becomes on/off based on current percent, and can animate if “charging” is active. :contentReference[oaicite:12]{index=12}
-
-### battery_splitted_segments
-Two-entity split battery (left/right).
-
-**Key fields**
-- `entity` – left side
-- `entity2` – right side
-- `segment_gap` *(number)*  
-- `show_split_entity_names` *(boolean)*  
-  Optional: show labels/names for the split sides. :contentReference[oaicite:13]{index=13}
-- Charging entities: `charging_state_entity`, `charging_power_entity`, plus the `...2` variants for the second side. :contentReference[oaicite:14]{index=14}
-
-**Intervals**
-- Used for block colors/gradients per level, just like other segment symbols.
+#### **Show entity names (split battery)** *(config key: `show_split_entity_names`)*
+Shows labels for both sides so users don’t confuse left vs right.
 
 ---
 
-## Tanks
+## Battery charging animation (optional)
+You can connect extra entities to show charging behavior.
 
-This section covers:
+#### **Main Entity - Charging state entity (on/off) to show charging animation** *(config key: `charging_state_entity`)*
+Use a binary/on-off entity that tells if the device is charging.
+
+Examples:
+- `binary_sensor.phone_charging`
+- `sensor.ev_charge_state` (if it outputs `on/off` or similar)
+
+#### **Main Entity - Charging power entity** *(config key: `charging_power_entity`)*
+Optional power sensor (W/kW) to show charging intensity.
+
+Split right side equivalents:
+- `charging_state_entity2`
+- `charging_power_entity2`
+
+---
+
+## Segments & Intervals (important!)
+Battery Segments is a segmented symbol, and **Intervals can also define how many segments exist**.
+
+In other words:
+- Intervals are not only colors — they can also act like “segment steps”.
+
+Also, the editor includes:
+
+#### **Gap between segments (0–40)** *(config key: `segment_gap`)*
+Controls the spacing between segments.
+- Set to 0 for a tight, solid look
+- Increase for clearer separation
+
+#### **Scale color mode** *(config key: `scale_color_mode`)*
+Controls whether the battery segments use:
+- the active interval color, or
+- per-segment colors
+
+(Recommended wording for users:  
+**“Active interval color”** vs **“Per segment colors”**)
+
+---
+
+## Battery Liquid — what it is
+Battery Liquid fills the entire battery smoothly based on charge level.
+It also supports charging animation using the same charging fields described above.
+
+---
+
+# Tanks
+<a id="tanks"></a>
+
+Covers:
 - `tank`
 - `ibc_tank`
 - `silo`
 - `gas_cylinder`
-- (Plus the “tank-like” level symbol) `water_level_segments`
+- `water_level_segments`
 
-All these symbols support:
-- `min`, `max`
+## Beginner setup steps
+1) Choose the symbol you want (tank/IBC/silo/gas cylinder/water level)
+2) Set **Min (scale)** and **Max (scale)** so the fill is correct
+3) Add Intervals for colors (low=red, mid=yellow, high=green)
 
-### tank
-Classic storage tank level.
-
-**Key fields**
-- `min`, `max` – maps entity state to fill height.
-
-
-### ibc_tank
-IBC container (bulk tank) level.
-
-**Key fields**
-- `min`, `max`
-
-### silo
-Vertical silo level.
-
-**Key fields**
-- `min`, `max`
-
-### gas_cylinder
-Gas cylinder level.
-
-**Key fields**
-- `min`, `max`
-
-### water_level_segments
-Segmented fill specifically for “level”.
-
-**Key fields**
-- `segment_gap` *(number)* – spacing between segments. :contentReference[oaicite:20]{index=20}
-- You decide the color and segment quantity by using intervals on main card.
+## Water Level Segments
+`water_level_segments` is segmented, and Intervals can influence how many visible segments it has (depending on your interval setup).
 
 ---
 
-## Garage Door
+# Garage Door
+<a id="garage-door"></a>
 
 Symbol: `garage_door`
 
-Renders a garage door that opens/closes based on entity value.
+## What it’s for
+Garage Door visually shows whether your garage is open or closed, and can be configured to feel like a real door with multiple panels.
 
-### Fields
-- `garage_door_type` *(string: `single` | `double`)*  
-  Single door or double door setup. 
+## Common entity types (important!)
+Garage doors can appear as different entities in Home Assistant:
+- A **cover** entity (best): `cover.garage_door` (often has position)
+- A **magnet / door sensor** (very common): `binary_sensor.garage_contact`  
+  states like: `open/closed` or `on/off`
 
-- `garage_door_width` *(number)*  
-  Door width (clamped internally). 
-
-- `garage_door_gap` *(number)*  
-  Gap between doors when `double`. 
-
-- `garage_door_entity2` *(string)*  
-  Optional second door entity (used when `double`). 
-
-- `garage_door_lamp_entity` *(string)*  
-  Optional “inside lamp” entity for door 1 (controls interior light effect). 
-
-- `garage_door_lamp_entity2` *(string)*  
-  Optional “inside lamp” entity for door 2 (double mode). 
-
-### How opening is calculated
-- The door position is mapped from the main entity state using `min`/`max` into a percentage (0–100%).  
-- With `double`, door1 uses `entity` and door2 uses `garage_door_entity2`.
-
-### Intervals for garage_door
-Intervals are used to create panel blocks/segments across the door (and may be used for smooth animation behavior depending on your interval setup). :contentReference[oaicite:28]{index=28}
+This card supports both numeric/position behavior and state matching using Intervals.
 
 ---
 
-## Blinds
+## Panels are controlled by Intervals
+Garage doors often have visible panels. In this card:
+- the **number of Intervals** can define the **number of panels**
+- each panel (interval) can have its own color and timing
+
+### State-only sensors (open/closed, on/off)
+If your entity only has two states, you still need at least **two Intervals**:
+- Interval 1 matches `closed`
+- Interval 2 matches `open`
+
+### Example: 5 panels + realistic timing
+If you want 5 panels:
+- create 5 intervals
+- first interval matches `closed`
+- last interval matches `open`
+
+Now add timing:
+If the door takes 10 seconds to open and you have 5 panels:
+- set **Seconds to open this segment** to **2** on each interval  
+(2 seconds × 5 segments = 10 seconds total)
+
+This makes the animation feel like the real door.
+
+---
+
+## Garage door editor fields (as seen in UI)
+
+#### **Door type** *(config key: `garage_door_type`)*
+Choose:
+- single door
+- double door (two doors side-by-side)
+
+#### **Door width** *(config key: `garage_door_width`)*
+Adjusts the width of each door (mostly useful for double door layouts).
+
+#### **Gap between doors** *(config key: `garage_door_gap`)*
+Space between two doors in double mode.
+
+#### **Second garage door entity** *(config key: `garage_door_entity2`)*
+Only used for double mode (door #2).
+
+#### **First garage inside lamp entity** *(config key: `garage_door_lamp_entity`)*
+Optional lamp entity that creates a nice interior light glow effect behind the door.
+
+#### **Second inside lamp entity** *(config key: `garage_door_lamp_entity2`)*
+Same as above, but for door #2 (double mode).  
+If your garage uses one lamp for both doors, you can use the same lamp entity for both fields.
+
+---
+
+## Creative tip: use badges around your garage
+Once the door looks good, add badges for:
+- outdoor lights
+- an “open/close” button
+- camera image badge
+- plants / decoration icons  
+This card is designed to let you build a “scene tile” around the main symbol.
+
+---
+
+# Blinds
+<a id="blinds"></a>
 
 Symbol: `blind`
 
-This is a window blind that reuses the garage door engine/config structure. :contentReference[oaicite:29]{index=29}
+## Blinds work the same way as Garage Door
+Blinds reuse the same core logic:
+- Intervals can match states (`open/closed`, `on/off`)
+- Intervals can define how many sections the blinds have
+- “Seconds per segment” can create realistic movement
 
-### Fields
-Blind uses the *same* sizing/double/lamp fields as `garage_door`:
-- `garage_door_type` (`single` | `double`)
-- `garage_door_width`
-- `garage_door_gap`
-- `garage_door_entity2`
-- `garage_door_lamp_entity`
-- `garage_door_lamp_entity2` 
+## State-only sensors (open/closed)
+If your blind entity is just open/closed:
+- create multiple intervals
+- first interval matches `closed`
+- last interval matches `open`
+- optionally distribute opening time across segments using “Seconds to open this segment”
 
-Additionally:
-- `blind_style` *(string: `persienne` | `lamella`)*  
-  Changes blind rendering style. 
+## Blind type
+#### **Blind style** *(config key: `blind_style`)*
+Select the visual style:
+- Lamella style
+- Classic blinds (persienne)
 
-### Intervals for blind
-Intervals are used to build visual “panels/segments” and can also affect the look through gradients. :contentReference[oaicite:32]{index=32}
+## Shared door/blind layout fields
+In the editor, the blind symbol uses the same sizing/double/lamp fields as garage door:
+- **Door type**
+- **Door width**
+- **Gap between doors**
+- **Second garage door entity** (acts as second blind entity)
+- **First garage inside lamp entity**
+- **Second inside lamp entity**
+
+(They keep the same labels in the UI.)
 
 ---
 
-## Fan
+# Fan
+<a id="fan"></a>
 
 Symbol: `fan`
 
-Renders a fan. The fan speed/visual intensity is based on the main entity value mapped using `min/max`.
+## What it’s for
+A fan symbol for ventilation and HVAC dashboards. By using intervals you can
+control the visual look of the blades and also speed of the blades. 
+On high speed it will show a cool wind animation.
 
-### Fields
-- `fan_blade_count` *(integer, 2–8)*  
-  Number of fan blades. Used by `fan` and `heatpump`. 
+#### **Blade count** *(config key: `fan_blade_count`)*
+How many fan blades are drawn (visual preference).
 
-- `fan_show_frame` *(boolean)*  
-  Fan-only option to show casing/frame. :contentReference[oaicite:34]{index=34}
-
-### Typical usage
-- If you use a percentage sensor, set `min: 0`, `max: 100`.
-- If you use a fan entity with discrete speeds, consider converting to a numeric helper/sensor so the visual matches the real output.
+#### **Show frame (Fan)** *(config key: `fan_show_frame`)*
+Shows/hides the fan casing/frame.
 
 ---
 
-## Heatpump
+# Heatpump
+<a id="heatpump"></a>
 
 Symbol: `heatpump`
 
-Renders a heatpump-style badge/symbol with fan blades (also uses `fan_blade_count`). 
+## What it’s for
+A stylized heatpump/HVAC symbol.
 
-### Fields
-- `fan_blade_count` *(integer, 2–8)*  
-  Same as Fan. :contentReference[oaicite:36]{index=36}
-
-### Notes
-- `industrial_look` does not apply to `heatpump`. :contentReference[oaicite:37]{index=37}
+#### **Blade count** *(config key: `fan_blade_count`)*
+Same as Fan — changes how many blades are drawn.
 
 ---
 
-## Image
+# Image
+<a id="image"></a>
 
 Symbol: `image`
 
-Lets you show an image either from URL/path or from HA Media (if configured).
+## Two ways to use images (important!)
+1) **Image as the main symbol** (Symbol = Image)  
+2) **Image inside a Badge** (Badge “Use image instead of icon”)
 
-### Fields
-- `image_source` *(string: `url` | `media`)*  
-  Selects where image comes from. 
-
-- `image_url` *(string)*  
-  Used when `image_source: url`. :contentReference[oaicite:39]{index=39}
-
-- `image_media` *(string)*  
-  Used when `image_source: media` (a media_content_id). :contentReference[oaicite:40]{index=40}
-
-- `image_fit` *(string: `cover` | `contain`)*  
-  Fit mode. :contentReference[oaicite:41]{index=41}
-
-- `image_full_card` *(boolean)*  
-  If enabled, the image becomes a full card background. :contentReference[oaicite:42]{index=42}
-
-- `image_opacity` *(number 0–1)*  
-  Controls image opacity. :contentReference[oaicite:43]{index=43}
-
-- `image_radius` *(number)*  
-  Rounds corners. :contentReference[oaicite:44]{index=44}
-
-#### Frame
-- `image_frame` *(boolean)*  
-- `image_frame_color` *(string)*  
-- `image_frame_width` *(number)* :contentReference[oaicite:45]{index=45}
-
-#### Tint overlay
-- `image_tint` *(boolean)*  
-- `image_tint_color` *(string)*  
-- `image_tint_opacity` *(number 0–1)* :contentReference[oaicite:46]{index=46}
-
-#### Dim when entity is off
-- `image_dim_off` *(boolean)*  
-- `image_dim_off_opacity` *(number 0–1)* 
+These are both powerful, but configured in different places.
 
 ---
 
-## Badges
+## A) Main card image (Symbol = Image)
 
-Badges are draggable overlay items placed freely inside the card.  
-They can show:
-- icon or image
-- text label (with templates)
-- optional slider
-- individual tap-action (including call-service)
+### What it’s great for
+- A dashboard tile with a photo background (garage/driveway/room)
+- A “scene tile” where you place badges on top
+- A themed tile per room/device
 
-### Badge object (per item in `badges:`)
-Each badge is an object with these key groups:
+### Image fields in the editor (main card)
 
-#### Position and identity
-- `x` *(number)*, `y` *(number)*  
-  Position in the card (dragging updates these).
+#### **Image URL / path** *(config key: `image_url`)*
+The path to your image.  
+Typical Home Assistant local path:
+- `/local/your_folder/image.png`
 
-- `entity` *(string)*  
-  Entity for this badge (can be different from main `entity`).
+#### **Image fit** *(config key: `image_fit`)*
+- `cover` fills the card (may crop)
+- `contain` shows the full image (may add borders)
 
-- `title` *(string)*  
-  Optional title/tooltip.
+#### **Full card background** *(config key: `image_full_card`)*
+If enabled, the image becomes the full card background (recommended for tiles).
 
-#### Label (supports templates)
-- `label` *(string)*  
-  Text shown under/near the badge. Supports variables like `<value>`, `<name>`, etc. :contentReference[oaicite:48]{index=48}
+#### **Opacity (0-1)** *(config key: `image_opacity`)*
+Controls how visible the image is.
 
-#### Icon / image
-- `icon` *(string: mdi:...)*  
-  Icon shown if image is not used.
+#### **Radius (px)** *(config key: `image_radius`)*
+Rounded corners for the image.
 
-- `use_image` *(boolean)*  
-  Use image instead of icon (badge image mode).
+#### **Tint overlay** *(config key: `image_tint`)*
+Adds a colored layer on top of the image (commonly used to darken a photo).
 
-- `img_source` *(string)*, `img_url` *(string)*, `img_media` *(string)*  
-  Image selection for the badge.
+#### **Tint color** *(config key: `image_tint_color`)*
+The tint color (black is common).
 
-- `img_fit` *(string: `cover` | `contain`)*  
-  Fit mode for badge image.
+#### **Tint opacity (0-1)** *(config key: `image_tint_opacity`)*
+Strength of the tint.
 
-- `img_tint` / `img_tint_color` / `img_tint_opacity`  
-  Optional tint overlay for badge image.
+#### **Dim when off** *(config key: `image_dim_off`)*
+If enabled, the image dims when the main entity is off.
 
-- `img_frame` / `img_frame_color` / `img_frame_width`
-  Optional frame.
+#### **Dim factor (0-1)** *(config key: `image_dim_off_opacity`)*
+How much it dims.
 
-- `img_dim_when_off` / `img_dim_when_off_opacity`
-  Optional dimming when badge entity is off. :contentReference[oaicite:49]{index=49}
+#### **Frame** *(config key: `image_frame`)*
+Adds a border around the image.
 
-#### Slider (optional)
-Badges can optionally show a slider control.
+#### **Frame color** *(config key: `image_frame_color`)*
+Border color.
 
-- `show_slider` *(boolean)*  
-  Enables slider. (Older configs may have used `style: slider`, which is still accepted as fallback.) :contentReference[oaicite:50]{index=50}
-
-- `slider_min` *(number | null)*  
-- `slider_max` *(number | null)*  
-- `slider_step` *(number | null)*  
-  If null/empty, the card will attempt to use sensible defaults. 
-
-- `slider_orientation` *(string: `horizontal` | `vertical`)* 
-- `slider_update` *(string: `release` | `live`)*  
-  `release`: update when user releases thumb  
-  `live`: update while dragging 
-
-- `slider_show_value` *(boolean)*  
-  Show numeric value next to the slider. 
-
-- `slider_length` *(number | null)*  
-- `slider_thickness` *(number | null)*  
-- `slider_thumb_size` *(number | null)*  
-- `slider_thumb_radius` *(number | null)*  
-- `slider_track_radius` *(number | null)*  
-- `slider_thumb_color` *(string)*  
-- `slider_track_color` *(string)* 
-
-#### Tap action (per badge)
-Each badge can have its own action:
-- `tap_action.action` *(string)*  
-  `more-info`, `toggle`, `call-service`, `none` 
-
-- `tap_action.service` *(string)*  
-  Example: `light.turn_on`
-
-- `tap_action.service_data` *(object | string | null)*  
-  JSON payload for the service call. :contentReference[oaicite:57]{index=57}
-
-#### Badge intervals (optional per badge)
-Badges can have their own interval list. See **Intervals**.  
-Additionally badge intervals can override:
-- `new_value` (replace what `<value>` expands to)
-- `icon` (temporary icon override)
-- `icon_color` (temporary icon color) :contentReference[oaicite:58]{index=58}
+#### **Frame width** *(config key: `image_frame_width`)*
+Border thickness.
 
 ---
 
-## Intervals
+## B) Badge images (images inside badges)
 
-Intervals are the card’s “rule engine” for colors, gradients, outlines, and some animation behaviors.
+Badge images are powerful because they can become “clickable picture buttons”:
+- tap to toggle a light
+- tap to call a service
+- show a decorative icon or avatar
+- create a full “scene tile” look around the main image
 
-They exist in:
-- `intervals` on the main card
-- `intervals` inside a badge (badge-specific overrides)
-
-### Interval object
-Common fields:
-- `to` *(number)*  
-  Upper threshold for the interval.
-
-- `color` *(string)*  
-  Fill color for the interval.
-
-- `outline` *(string)*  
-  Outline/stroke color for the interval.
-
-- `gradient` *(object)*
-  - `gradient.enabled` *(boolean)*
-  - `gradient.from` *(string)*
-  - `gradient.to` *(string)*
-
-### Badge-only interval overrides
-These fields are especially useful for badges:
-- `new_value` *(string)*  
-  Overrides the value that `<value>` expands to while this interval is active.  
-  Supports templates/variables. 
-
-- `icon` *(string)*  
-  Overrides badge icon while interval is active. :contentReference[oaicite:60]{index=60}
-
-- `icon_color` *(string)*  
-  Overrides badge icon color while interval is active. :contentReference[oaicite:61]{index=61}
-
-### How intervals are used by different symbols
-- **Batteries / Water level / Tanks:**  
-  Intervals define fill colors and optionally gradients.
-
-- **Garage door / Blind:**  
-  Intervals are used to build panel blocks/segments (each interval becomes a solid/gradient section). :contentReference[oaicite:62]{index=62}
+Badge image fields are described in the Badges section below.
 
 ---
 
-# End of documentation
+# Badges
+<a id="badges"></a>
+
+Badges are overlay widgets placed anywhere on the card.
+
+## How to move badges (3 ways)
+In the editor you can position a badge by:
+1) Drag & drop on the preview  
+2) Using the X/Y buttons (fine adjustments)  
+3) Typing the values directly
+
+#### **Position X (%)** *(badge field: `x`)*
+Left → Right position.
+
+#### **Position Y (%)** *(badge field: `y`)*
+Top → Bottom position.
+
+---
+
+## Badge fields (as seen in UI)
+
+#### **Badge entity** *(badge field: `entity`)*
+The entity this badge is linked to.
+
+#### **Badge title (optional)** *(badge field: `title`)*
+Optional helper title (useful for tooltips or clarity).
+
+#### **Label and variables** *(badge field: `label`)*
+Text shown on the badge. Supports templates like:
+- `Temp: <value>`
+- `<name>`
+
+#### **Show icon** *(badge field: `show_icon`)*
+If off, the badge can show only text (useful for minimal layouts).
+
+#### **Icon / Icon (mdi:...)** *(badge field: `icon`)*
+The icon shown when the badge is not using an image.
+
+#### **Change icon color based on <state>** *(badge field: `icon_color_by_state`)*
+If enabled, the badge can change icon color depending on the entity state.
+
+---
+
+## Badge images (instead of icons)
+
+#### **Use image (instead of icon)** *(badge field: `use_image`)*
+Enable to show an image instead of an icon.
+
+#### **Image URL / path** *(badge field: `img_url`)*
+Path to the badge image. Example:
+- `/local/icons/outdoor_light.png`
+
+#### **Image fit** *(badge field: `img_fit`)*
+- `cover` fills the badge area (may crop)
+- `contain` shows full image (may add empty space)
+
+#### **Image opacity (0-1)** *(badge field: `img_opacity`)*
+Transparency of the badge image.
+
+#### **Image radius** *(badge field: `img_radius`)*
+Rounded corners for the badge image.
+
+#### **Tint overlay / Tint color / Tint opacity (0-1)** *(badge fields: `img_tint`, `img_tint_color`, `img_tint_opacity`)*
+Adds a colored layer over the badge image.
+
+#### **Frame / Frame color / Frame width** *(badge fields: `img_frame`, `img_frame_color`, `img_frame_width`)*
+Adds a border to badge image.
+
+#### **Dim when off / Dim factor (0-1)** *(badge fields: `img_dim_when_off`, `img_dim_when_off_opacity`)*
+Dims the badge image when the badge entity is off.
+
+---
+
+## Badge slider (optional)
+
+#### **Show slider** *(badge field: `show_slider`)*
+Adds a slider to the badge to control the entity.
+
+Slider controls in the editor:
+- **Orientation** *(badge field: `slider_orientation`)*
+- **Update mode** *(badge field: `slider_update`)*  
+  - `release`: updates when you release (stable, recommended)
+  - `live`: updates while dragging (responsive)
+- **Show value** *(badge field: `slider_show_value`)*
+- **Min (optional)** *(badge field: `slider_min`)*
+- **Max (optional)** *(badge field: `slider_max`)*
+- **Step (optional)** *(badge field: `slider_step`)*
+- **Length (px)** *(badge field: `slider_length`)*
+- **Track thickness (px)** *(badge field: `slider_thickness`)*
+- **Thumb size (px)** *(badge field: `slider_thumb_size`)*
+- **Thumb color** *(badge field: `slider_thumb_color`)*
+- **Thumb radius (px)** *(badge field: `slider_thumb_radius`)*
+- **Track color** *(badge field: `slider_track_color`)*
+- **Track radius (px)** *(badge field: `slider_track_radius`)*
+
+Beginner tip: Start with defaults and only style after functionality works.
+
+---
+
+## Badge tap action (click behavior)
+
+#### **Tap action** *(badge field: `tap_action`)*
+Defines what happens when you tap the badge.
+Common actions:
+- `more-info` (opens entity popup)
+- `toggle` (toggles entity)
+- `call-service` (runs a Home Assistant service)
+- `none`
+
+If you use call-service, the editor provides:
+- **Pick service from list**
+- **Available services**
+- **Service (domain.service)**
+- **Service data (optional JSON)**
+
+---
+
+## Badge styles (meaning of each style)
+#### **Badge style** *(badge field: `style`)*
+The editor offers these styles (exact names as shown):
+
+- **Glass** *(value: `glass`)*  
+  Frosted/glossy look. Great on image tiles and dark dashboards.
+
+- **Solid** *(value: `solid`)*  
+  Strong background for maximum readability (best for beginners).
+
+- **Outline** *(value: `outline`)*  
+  Border only, clean look when you don’t want heavy blocks.
+
+- **None** *(value: `none`)*  
+  No background; minimal style.
+
+- **Left arrow** *(value: `left_arrow`)*  
+- **Right arrow** *(value: `right_arrow`)*  
+- **Top arrow** *(value: `top_arrow`)*  
+- **Bottom arrow** *(value: `bottom_arrow`)*  
+  Arrow shaped badges. Great for directional hints or flows.
+
+- **Recycle arrow left** *(value: `recycle_left`)*  
+- **Recycle arrow right** *(value: `recycle_right`)*  
+  Circular arrow styles. Great for “refresh/loop” visuals.
+
+- **Fan (symbol)** *(value: `fan`)*  
+  Uses the fan symbol as a badge style. Good for ventilation widgets.
+
+- **Heatpump (symbol)** *(value: `heatpump`)*  
+  Uses the heatpump symbol as a badge style.
+
+### Styling badges (colors, transparency, size)
+Depending on your style, the editor provides these controls to fine-tune appearance:
+- **Padding (px)** *(badge field: `padding`)*
+- **Radius (px)** *(badge field: `radius`)*
+- **Font size (px)** *(badge field: `font_size`)*
+- **Icon size (px)** *(badge field: `icon_size`)*
+- **Opacity (optional)** *(badge field: `opacity`)*
+These are used to make badges larger/smaller, more/less transparent, and better aligned with your dashboard theme.
+
+---
+
+# Intervals
+<a id="intervals"></a>
+
+Intervals are the card’s rule engine.
+
+They can do BOTH:
+- **Numeric rules** (battery %, liters, watts, etc.)
+- **Exact match rules** (state text like `on/off`, `open/closed`)
+
+They can also be used to define **segment/panel count** for segmented symbols (battery segments, garage door panels, blinds sections).
+
+---
+
+## Main card Intervals vs Badge Intervals (separate!)
+### Main card Intervals
+Configured at the card level:
+```yaml
+intervals:
+  - ...
