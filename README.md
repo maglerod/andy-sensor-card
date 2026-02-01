@@ -65,6 +65,7 @@ Use variables in labels, interval matched text, and badge labels:
 - [Intervals](DOCUMENTATION.md#intervals)
 - [Installation](#installation)
 - [Changelog](CHANGELOG.md)
+- [Examples with Copy & paste YAML](EXAMPLES.md)
 - [Support me :) ](#support)
 
 
