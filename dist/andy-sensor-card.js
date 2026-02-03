@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.0
+ * Andy Sensor Card v1.0.1
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -20,10 +20,8 @@
 
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "1.0.1";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
-
-//console.info(CARD_TAGLINE);
 
 console.info(
   `%c${CARD_TAGLINE}`,
@@ -48,11 +46,9 @@ const html = window.html || LitElement.prototype.html;
 const css = window.css || LitElement.prototype.css;
 
 
-// Card tag + editor tag (reuse everywhere)
 const CARD_TAG = "andy-sensor-card";
 const EDITOR_TAG = "andy-sensor-card-editor";
 
-// Battery-friendly default intervals (0..100)
 const DEFAULT_INTERVALS = [
   { id: "it0", to: 0,   color: "#ef4444", outline: "#ffffff", scale_color: "#ef4444", gradient: { enabled: false, from: "#ef4444", to: "#ef4444" } },
   { id: "it1", to: 20,  color: "#f59e0b", outline: "#ffffff", scale_color: "#f59e0b", gradient: { enabled: false, from: "#f59e0b", to: "#f59e0b" } },
@@ -666,6 +662,13 @@ this._gateAnimRaf = 0;
 
       // Main tap action + overlay positions
       tap_action: "more-info",
+      tap_action_service: "",
+      tap_action_service_data: "",
+      tap_action_service_picker: true,
+      // For Gate/Garage door/Blind: start animation immediately when you tap (useful when the sensor updates state only when fully closed)
+      tap_starts_animation: true,
+      // How many seconds to keep predictive motion active before we trust the real entity state
+      tap_confirm_state_in: null,
       name_position: "top_left",
       stats_position: "bottom_center",
 
@@ -799,6 +802,14 @@ const rawSym = String(this._config.symbol || "battery_liquid");
     if (!allowed.has(sym)) sym = "battery_liquid";
     this._config.symbol = sym;
 
+    // Default scale range for binary position symbols (Gate / Garage door / Blind)
+    // If the user didn't explicitly set min/max, use 0..1 instead of 0..100.
+    if ((sym === "gate" || sym === "garage_door" || sym === "blind")) {
+      if (!("min" in cfg)) this._config.min = 0;
+      if (!("max" in cfg)) this._config.max = 1;
+    }
+
+
     // Industrial look only applies where we have modern renderings, and never for Fan/Heatpump.
     const industrialSupported = new Set([
       "battery_liquid",
@@ -881,7 +892,37 @@ const rawSym = String(this._config.symbol || "battery_liquid");
 
     // Normalize tap_action + overlay positions
     const ta = String(this._config.tap_action || 'more-info');
-    this._config.tap_action = (ta === 'toggle' || ta === 'none' || ta === 'more-info') ? ta : 'more-info';
+    this._config.tap_action = (ta === 'toggle' || ta === 'none' || ta === 'more-info' || ta === 'call-service') ? ta : 'more-info';
+    this._config.tap_starts_animation = (this._config.tap_starts_animation == null) ? true : !!this._config.tap_starts_animation;
+
+    // Predictive animation confirmation timeout (seconds). If not set:
+    // - If intervals define seconds => use computed open/close duration
+    // - Otherwise default to 10 seconds.
+    try {
+      const symPred = String(this._config?.symbol || "").trim().toLowerCase();
+      const isPred = (symPred === "gate" || symPred === "garage_door" || symPred === "blind");
+      if (isPred) {
+        let conf = Number(this._config.tap_confirm_state_in);
+        if (!Number.isFinite(conf) || conf <= 0) {
+          const its = Array.isArray(this._config?.intervals) ? this._config.intervals : [];
+          const hasAnySec = its.some(it => Number(it?.seconds) > 0);
+          if (hasAnySec) {
+            let sec = 0;
+            if (symPred === "gate") {
+              sec = (this._gateGetDurationMs ? (this._gateGetDurationMs() / 1000) : 0);
+            } else {
+              const segs = this._garageBuildSegments ? this._garageBuildSegments() : null;
+              const totalMs = Array.isArray(segs) ? segs.reduce((a, s) => a + (Number(s?.durMs) || 0), 0) : 0;
+              sec = totalMs / 1000;
+            }
+            conf = (sec > 0.1) ? Math.max(1, Math.round(sec * 10) / 10) : 10;
+          } else {
+            conf = 10;
+          }
+        }
+        this._config.tap_confirm_state_in = conf;
+      }
+    } catch (_) {}
 
     const posOk = new Set(['top_left','top_center','top_right','bottom_left','bottom_center','bottom_right']);
     const np = String(this._config.name_position || 'top_left');
@@ -1488,9 +1529,25 @@ _gateSyncAnimation() {
     return;
   }
 
+  const now = performance.now();
+
+  // If we started a predictive animation on tap, keep animating towards the manual target
+  // until HA state catches up (or the timeout expires).
+  if (this._gateManual && now < Number(this._gateManual.until || 0)) {
+    const tpState = this._gateComputeTargetP();
+    const manualTp = clamp01(Number(this._gateManual.target ?? 0));
+    if (Math.abs(tpState - manualTp) < 0.02) {
+      this._gateManual = null;
+    } else {
+      this._gateAnimateTo(manualTp);
+      return;
+    }
+  }
+
   const tp = this._gateComputeTargetP();
   this._gateAnimateTo(tp);
 }
+
 
 // ---------------------------
 // Garage door animation (JS-driven, always animates between changes)
@@ -1780,8 +1837,79 @@ _garageSyncAnimation() {
     return;
   }
 
+  const now = performance.now();
+
+  // Predictive animation on tap: keep animating to the manual target until HA state updates.
+  if (this._gdManual && now < Number(this._gdManual.until || 0)) {
+    const { tp1: st1, tp2: st2 } = this._garageComputeTargets();
+    const m1 = clamp01(Number(this._gdManual.tp1 ?? 0));
+    const m2 = (this._gdManual.tp2 != null) ? clamp01(Number(this._gdManual.tp2)) : null;
+
+    const done1 = Math.abs(clamp01(st1) - m1) < 0.02;
+    const done2 = (m2 == null) ? true : Math.abs(clamp01((st2 == null) ? st1 : st2) - m2) < 0.02;
+
+    if (done1 && done2) {
+      this._gdManual = null;
+    } else {
+      this._garageAnimateToTargets(m1, m2);
+      return;
+    }
+  }
+
   const { tp1, tp2 } = this._garageComputeTargets();
   this._garageAnimateToTargets(tp1, tp2);
+}
+
+
+// ---------------------------
+// Predictive animation on tap (Gate / Garage door / Blind)
+// ---------------------------
+_startPredictiveMotion(sym) {
+  try {
+    const s = String(sym || "").trim().toLowerCase();
+    if (s === "gate") return this._gatePredictiveStart();
+    if (s === "garage_door" || s === "blind") return this._garagePredictiveStart();
+  } catch (_) {}
+}
+
+_garagePredictiveStart() {
+  try {
+    // Current positions (prefer current animated p to avoid jumps)
+    const stTargets = this._garageComputeTargets();
+    const cur1 = Number.isFinite(this._gdAnim?.doors?.[0]?.p) ? this._gdAnim.doors[0].p : stTargets.tp1;
+    const cur2 = (stTargets.tp2 != null)
+      ? (Number.isFinite(this._gdAnim?.doors?.[1]?.p) ? this._gdAnim.doors[1].p : stTargets.tp2)
+      : null;
+
+    const tgt1 = (clamp01(cur1) > 0.5) ? 0 : 1;
+    const tgt2 = (cur2 != null) ? ((clamp01(cur2) > 0.5) ? 0 : 1) : null;
+
+    const plan1 = this._garageBuildSteps(cur1, tgt1);
+    const plan2 = (tgt2 != null) ? this._garageBuildSteps(cur2, tgt2) : { totalMs: 0 };
+    const totalMs = Math.max(Number(plan1?.totalMs || 0), Number(plan2?.totalMs || 0));
+
+    this._gdManual = {
+      tp1: tgt1,
+      tp2: tgt2,
+      until: performance.now() + (Math.max(1000, Math.round((Number(this._config?.tap_confirm_state_in) || 10) * 1000)) + 200),
+    };
+
+    this._garageAnimateToTargets(tgt1, tgt2);
+  } catch (_) {}
+}
+
+_gatePredictiveStart() {
+  try {
+    const cur = Number.isFinite(this._gateAnim?.p) ? this._gateAnim.p : this._gateComputeTargetP();
+    const tgt = (clamp01(cur) > 0.5) ? 0 : 1;
+
+    this._gateManual = {
+      target: tgt,
+      until: performance.now() + (Math.max(1000, Math.round((Number(this._config?.tap_confirm_state_in) || 10) * 1000)) + 200),
+    };
+
+    this._gateAnimateTo(tgt);
+  } catch (_) {}
 }
 
 
@@ -1959,7 +2087,7 @@ _onBadgeTap(ev, badge) {
       try { data = JSON.parse(sd); } catch (e) { data = {}; }
     }
 
-    if (entityId && (data.entity_id == null)) data.entity_id = entityId;
+    if (entityId && (data.entity_id == null) && domain !== "script") data.entity_id = entityId;
 
     this.hass?.callService?.(domain, service, data);
     return;
@@ -2246,6 +2374,15 @@ _onBadgeSliderChange(ev, badge) {
     const act = String(this._config?.tap_action || 'more-info');
     if (!this.hass || !entityId || act === 'none') return;
 
+    // Predictive animation: for Gate/Garage door/Blind, start moving immediately on tap (useful when the sensor updates state late).
+    try {
+      const sym = String(this._config?.symbol || "").trim().toLowerCase();
+      const predictiveOn = (this._config?.tap_starts_animation == null) ? true : !!this._config.tap_starts_animation;
+      if (predictiveOn && (act === "toggle" || act === "call-service") && (sym === "gate" || sym === "garage_door" || sym === "blind")) {
+        this._startPredictiveMotion(sym);
+      }
+    } catch (_) {}
+
     if (act === 'toggle') {
       this.hass.callService('homeassistant', 'toggle', { entity_id: entityId });
       return;
@@ -2262,7 +2399,7 @@ _onBadgeSliderChange(ev, badge) {
       else if (typeof sd === "string" && sd.trim()) {
         try { data = JSON.parse(sd); } catch (e) { data = {}; }
       }
-      if (entityId && (data.entity_id == null)) data.entity_id = entityId;
+      if (entityId && (data.entity_id == null) && domain !== "script") data.entity_id = entityId;
 
       this.hass?.callService?.(domain, service, data);
       return;
@@ -7835,6 +7972,27 @@ const stopBubble = (e) => {
 
     root.appendChild(this._rowMainSvc);
 
+    // For Gate/Garage door/Blind: start animation immediately when you tap (useful when the sensor updates state only when fully closed)
+    this._rowTapStartsAnim = document.createElement("div");
+    this._rowTapStartsAnim.className = "grid2";
+    const tsa = mkSwitch("Tap starts animation (Gate/Garage/Blind)", "tap_starts_animation");
+    this._elTapStartsAnim = tsa.sw;
+    this._rowTapStartsAnim.appendChild(tsa.wrap);
+
+    // Confirm timeout (seconds)
+    const csi = mkText("Confirm state in (seconds)", "tap_confirm_state_in", "number", "10");
+    try { csi.min = 1; csi.step = 1; csi.max = 120; } catch (_) {}
+    this._elTapConfirm = csi;
+    this._rowTapStartsAnim.appendChild(csi);
+
+    const tsaHint = document.createElement("div");
+    tsaHint.className = "hint";
+    tsaHint.innerText = "Starts the open/close animation immediately when you tap. Confirm state in: how long we keep the predictive animation active before trusting the real entity state (useful when the sensor updates late).";
+    this._rowTapStartsAnim.appendChild(tsaHint);
+
+    root.appendChild(this._rowTapStartsAnim);
+
+
     this._updateMainSvcVisibility = () => {
       const act = String(this._config?.tap_action || "more-info");
       const isSvc = (act === "call-service");
@@ -8758,7 +8916,16 @@ varsHead.innerHTML = `
       this._rowIndustrial.style.display = hide ? "none" : "";
       this._swIndustrial.checked = !!this._config.industrial_look;
     
-    // Fan/Heatpump blade count visibility
+    
+    // Tap-starts-animation toggle visibility (Gate/Garage door/Blind)
+    if (this._rowTapStartsAnim && this._elTapStartsAnim) {
+      const showTsa = (baseSym === "garage_door" || baseSym === "gate" || baseSym === "blind");
+      this._rowTapStartsAnim.style.display = showTsa ? "" : "none";
+      try { this._elTapStartsAnim.checked = (this._config?.tap_starts_animation ?? true); } catch(_) {}
+      try { if (this._elTapConfirm) this._elTapConfirm.value = String(this._config?.tap_confirm_state_in ?? 10); } catch(_) {}
+    }
+
+// Fan/Heatpump blade count visibility
     if (this._rowFanBlade && this._elFanBladeCount) {
       const show = (baseSym === "fan" || baseSym === "heatpump");
       this._rowFanBlade.style.display = show ? "" : "none";
@@ -11640,6 +11807,33 @@ _centerBadgePreviewNow(badgeOrObj) {
     const key = target.configValue || target.dataset?.configValue;
     if (!key) return;
 
+    // Special: when switching Symbol to Gate / Garage door / Blind, default Max (scale) to 1 (if still on the default 0..100)
+    if (key === "symbol") {
+      let value = this._eventValue(ev, target);
+      const oldSym = String(this._config?.symbol || "").trim().toLowerCase();
+      const newSym = String(value || "").trim().toLowerCase();
+
+      this._commit("symbol", newSym);
+
+      const isSpecialNew = (newSym === "gate" || newSym === "garage_door" || newSym === "blind");
+      const isSpecialOld = (oldSym === "gate" || oldSym === "garage_door" || oldSym === "blind");
+
+      if (isSpecialNew && !isSpecialOld) {
+        const curMin = Number(this._config?.min);
+        const curMax = Number(this._config?.max);
+        const minOk = (!Number.isFinite(curMin) || Math.abs(curMin - 0) < 1e-9);
+        const maxOk = (!Number.isFinite(curMax) || Math.abs(curMax - 100) < 1e-9);
+
+        if (minOk && maxOk) {
+          this._commit("min", 0);
+          this._commit("max", 1);
+          try { if (this._elMin) this._elMin.value = "0"; } catch (_) {}
+          try { if (this._elMax) this._elMax.value = "1"; } catch (_) {}
+        }
+      }
+      return;
+    }
+
     if (typeof target.checked !== "undefined") {
       if (key === "image_frame") {
         // no-op, keep as-is
@@ -11649,7 +11843,7 @@ _centerBadgePreviewNow(badgeOrObj) {
 
     let value = this._eventValue(ev, target);
 //v1.0.2
-    if (key === "min" || key === "max" || key === "value_font_size" || key === "stats_hours" || key === "card_scale") {
+    if (key === "min" || key === "max" || key === "value_font_size" || key === "stats_hours" || key === "card_scale" || key === "tap_confirm_state_in") {
     //if (key === "min" || key === "max" || key === "value_font_size" || key === "stats_hours") {
     //v1.0.2
       value = value === "" ? 0 : Number(value);
