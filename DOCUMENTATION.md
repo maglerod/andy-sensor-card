@@ -310,6 +310,69 @@ Symbol: `garage_door`
 ## What it’s for
 Garage Door visually shows whether your garage is open or closed, and can be configured to feel like a real door with multiple panels.
 
+## I have two entities to control my garage port. One for open / close state and one for controlling the open / close action.
+Many gates, garage doors and blinds are monitored by a contact (magnet) sensor that only reports whether something is open/closed.
+However, the actual movement (open/close) is often triggered by a script, a cover entity, a switch, or another service call.
+**Andy Sensor Card** supports this setup by letting you:
+- Use the sensor for the visual state / animation
+- Use a Tap action to trigger the real open/close command
+
+**Recommended configuration**
+
+**1) Main entity = your contact sensor (state)**
+Set the card’s Main entity to the magnet/contact sensor, for example:
+- binary_sensor.garage_contact
+- binary_sensor.gate_open_sensor
+- binary_sensor.blinds_closed_contact
+
+This entity is only used to show Open/Closed state and drive the symbol/animation.
+2) Tap action = Call service (control)
+- Set Tap action to Call service, and call the thing that actually moves the device.
+Typical options:
+
+**A) Call a script**
+Use this when you have a script that triggers open/close (toggle):
+- Service: script.turn_on
+- Service data:
+- entity_id: script.garageport_open_close
+This is perfect for a “single button” opener where the same script toggles between opening/closing.
+
+**B) Call a cover service (if you have a cover entity)**
+If your garage/blinds is exposed as a cover.* entity, you can call:
+- cover.open_cover
+- cover.close_cover
+- cover.toggle
+- …and target your cover entity.
+
+**C) Call a switch (relay)**
+If a relay triggers the opener:
+- Service: switch.turn_on (or switch.toggle)
+- Target: switch.garage_relay
+
+**3) Make the animation feel responsive**
+Contact sensors often update only when the device is fully open/fully closed.
+That means the closing animation might otherwise start “too late”.
+Enable:
+- Tap starts animation (Gate/Garage/Blind)
+And set:
+- Confirm state in (seconds)
+
+Set it to approximately how long the device normally takes to move (example: 10–20s).
+This makes the animation start immediately when you tap, and then waits for the sensor state to confirm the final position.
+
+Example scenario
+- Main entity: binary_sensor.garage_contact (open/closed)
+- Tap action: Call service → script.turn_on → script.garageport_open_close
+- Tap starts animation: ON
+
+Confirm state in: 15 seconds
+Result:
+- The card shows the correct final state based on the sensor.
+- Tapping the card triggers the opener script.
+- The animation starts instantly and feels “real”, even if the sensor updates late.
+
+
+
 ## Common entity types (important!)
 Garage doors can appear as different entities in Home Assistant:
 - A **cover** entity (best): `cover.garage_door` (often has position)
@@ -333,8 +396,11 @@ If your entity only has two states, you still need at least **two Intervals**:
 ### Example: 5 panels + realistic timing
 If you want 5 panels:
 - create 5 intervals
-- first interval matches `closed`
-- last interval matches `open`
+- first interval matches `closed` or 0 as value
+- last interval matches `open` or 1 as value
+- The other Panels / segment should have value as 0.1, 0.2, 0.3 . The entity state will never reach those states but used to follow the animation.
+
+
 
 Now add timing:
 If the door takes 10 seconds to open and you have 5 panels:
