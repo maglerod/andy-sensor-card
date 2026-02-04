@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.1
+ * Andy Sensor Card v1.0.2
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -9,8 +9,6 @@
  * - Not affiliated with Home Assistant / Nabu Casa.
  * - Runs fully in the browser.
  *
- * Compatibility notes:
- * - Stats uses REST history endpoint via hass.callApi("GET", "history/period/...")
  *
  * Install: Se README.md in GITHUB
  *
@@ -20,8 +18,9 @@
 
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.1";
+const CARD_VERSION = "1.0.2";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
+
 
 console.info(
   `%c${CARD_TAGLINE}`,
@@ -46,9 +45,11 @@ const html = window.html || LitElement.prototype.html;
 const css = window.css || LitElement.prototype.css;
 
 
+// Card tag + editor tag (reuse everywhere)
 const CARD_TAG = "andy-sensor-card";
 const EDITOR_TAG = "andy-sensor-card-editor";
 
+// Battery-friendly default intervals (0..100)
 const DEFAULT_INTERVALS = [
   { id: "it0", to: 0,   color: "#ef4444", outline: "#ffffff", scale_color: "#ef4444", gradient: { enabled: false, from: "#ef4444", to: "#ef4444" } },
   { id: "it1", to: 20,  color: "#f59e0b", outline: "#ffffff", scale_color: "#f59e0b", gradient: { enabled: false, from: "#f59e0b", to: "#f59e0b" } },
@@ -552,6 +553,10 @@ class AndySensorCard extends LitElement {
     // Unique per card instance -> prevents SVG <defs> id collisions across multiple cards
     this._instanceId = `asc_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
 
+    // Tap confirm (safety) for Gate/Garage/Blind when state is closed
+    this._tapConfirmOpen = null; // { until, entityId, act, svc, data }
+    this._tapConfirmTimer = 0;
+
     
 
     // Badge drag in HA preview (editor only)
@@ -667,8 +672,9 @@ this._gateAnimRaf = 0;
       tap_action_service_picker: true,
       // For Gate/Garage door/Blind: start animation immediately when you tap (useful when the sensor updates state only when fully closed)
       tap_starts_animation: true,
-      // How many seconds to keep predictive motion active before we trust the real entity state
-      tap_confirm_state_in: null,
+      // Safety confirm before opening when state is closed (Gate/Garage/Blind)
+      tap_confirm_open: false,
+      tap_confirm_open_window: 10,
       name_position: "top_left",
       stats_position: "bottom_center",
 
@@ -895,34 +901,11 @@ const rawSym = String(this._config.symbol || "battery_liquid");
     this._config.tap_action = (ta === 'toggle' || ta === 'none' || ta === 'more-info' || ta === 'call-service') ? ta : 'more-info';
     this._config.tap_starts_animation = (this._config.tap_starts_animation == null) ? true : !!this._config.tap_starts_animation;
 
-    // Predictive animation confirmation timeout (seconds). If not set:
-    // - If intervals define seconds => use computed open/close duration
-    // - Otherwise default to 10 seconds.
-    try {
-      const symPred = String(this._config?.symbol || "").trim().toLowerCase();
-      const isPred = (symPred === "gate" || symPred === "garage_door" || symPred === "blind");
-      if (isPred) {
-        let conf = Number(this._config.tap_confirm_state_in);
-        if (!Number.isFinite(conf) || conf <= 0) {
-          const its = Array.isArray(this._config?.intervals) ? this._config.intervals : [];
-          const hasAnySec = its.some(it => Number(it?.seconds) > 0);
-          if (hasAnySec) {
-            let sec = 0;
-            if (symPred === "gate") {
-              sec = (this._gateGetDurationMs ? (this._gateGetDurationMs() / 1000) : 0);
-            } else {
-              const segs = this._garageBuildSegments ? this._garageBuildSegments() : null;
-              const totalMs = Array.isArray(segs) ? segs.reduce((a, s) => a + (Number(s?.durMs) || 0), 0) : 0;
-              sec = totalMs / 1000;
-            }
-            conf = (sec > 0.1) ? Math.max(1, Math.round(sec * 10) / 10) : 10;
-          } else {
-            conf = 10;
-          }
-        }
-        this._config.tap_confirm_state_in = conf;
-      }
-    } catch (_) {}
+    // Tap confirm safety (Gate/Garage/Blind)
+    this._config.tap_confirm_open = !!this._config.tap_confirm_open;
+    let _tcw = Number(this._config.tap_confirm_open_window);
+    if (!Number.isFinite(_tcw) || _tcw <= 0) _tcw = 10;
+    this._config.tap_confirm_open_window = Math.max(1, Math.min(60, Math.round(_tcw)));
 
     const posOk = new Set(['top_left','top_center','top_right','bottom_left','bottom_center','bottom_right']);
     const np = String(this._config.name_position || 'top_left');
@@ -944,6 +927,14 @@ const rawSym = String(this._config.symbol || "battery_liquid");
     if (!st) return null;
     return toNumberMaybe(st.state);
   }
+
+  _getRawState(entityId) {
+    if (!entityId) return null;
+    const st = this.hass?.states?.[entityId];
+    if (!st) return null;
+    return st.state;
+  }
+
 
   _getUnit() {
     if (this._config.unit) return this._config.unit;
@@ -1579,6 +1570,14 @@ _garageComputeTargetP(entityIdOverride) {
     if (!Number.isFinite(maxS)) maxS = 100;
     if (maxS < minS) [minS, maxS] = [maxS, minS];
 
+    // If the entity provides text states (opening/open/closing/closed), map them to min/max
+    // so the animation can move even when no numeric position is available.
+    if (raw == null || !Number.isFinite(Number(raw))) {
+      const s = String(st.state ?? "").trim().toLowerCase();
+      if (s === "open" || s === "opening") raw = maxS;
+      else if (s === "closed" || s === "closing") raw = minS;
+    }
+
     const range = (maxS - minS) || 1;
     const p = (raw != null && Number.isFinite(Number(raw))) ? clamp01((Number(raw) - minS) / range) : 0;
     return p;
@@ -1891,7 +1890,7 @@ _garagePredictiveStart() {
     this._gdManual = {
       tp1: tgt1,
       tp2: tgt2,
-      until: performance.now() + (Math.max(1000, Math.round((Number(this._config?.tap_confirm_state_in) || 10) * 1000)) + 200),
+      until: performance.now() + Math.max(800, totalMs) + 1400,
     };
 
     this._garageAnimateToTargets(tgt1, tgt2);
@@ -1905,7 +1904,7 @@ _gatePredictiveStart() {
 
     this._gateManual = {
       target: tgt,
-      until: performance.now() + (Math.max(1000, Math.round((Number(this._config?.tap_confirm_state_in) || 10) * 1000)) + 200),
+      until: performance.now() + 1800,
     };
 
     this._gateAnimateTo(tgt);
@@ -2367,12 +2366,130 @@ _onBadgeSliderChange(ev, badge) {
 
 
 
+
+  // ---------------------------
+  // Tap confirm safety (Gate/Garage/Blind)
+  // ---------------------------
+  _isClosedLikeState(stateRaw) {
+    const s = String(stateRaw ?? "").trim().toLowerCase();
+    return (s === "closed" || s === "off" || s === "false" || s === "0");
+  }
+
+  _clearTapConfirmOpen() {
+    if (this._tapConfirmTimer) {
+      try { clearTimeout(this._tapConfirmTimer); } catch (_) {}
+      this._tapConfirmTimer = 0;
+    }
+    this._tapConfirmOpen = null;
+    try { this.requestUpdate?.(); } catch (_) {}
+  }
+
+  _armTapConfirmOpen(payload) {
+    const win = Math.max(1, Math.round(Number(this._config?.tap_confirm_open_window) || 10));
+    const until = Date.now() + win * 1000;
+    this._tapConfirmOpen = { ...(payload || {}), until };
+
+    if (this._tapConfirmTimer) {
+      try { clearTimeout(this._tapConfirmTimer); } catch (_) {}
+      this._tapConfirmTimer = 0;
+    }
+
+    this._tapConfirmTimer = setTimeout(() => {
+      if (this._tapConfirmOpen && Date.now() >= (this._tapConfirmOpen.until || 0)) {
+        this._tapConfirmOpen = null;
+        this._tapConfirmTimer = 0;
+        try { this.requestUpdate?.(); } catch (_) {}
+      }
+    }, win * 1000 + 50);
+
+    try { this.requestUpdate?.(); } catch (_) {}
+  }
+
+  _onTapConfirmLock(ev) {
+    try { ev?.stopPropagation?.(); } catch (_) {}
+    try { ev?.preventDefault?.(); } catch (_) {}
+
+    const p = this._tapConfirmOpen;
+    if (!p || Date.now() > (p.until || 0)) {
+      this._clearTapConfirmOpen();
+      return;
+    }
+
+    const act = String(p.act || "");
+    const entityId = String(p.entityId || "");
+
+    try {
+      if (act === "toggle") {
+        this.hass?.callService?.("homeassistant", "toggle", { entity_id: entityId });
+      } else if (act === "call-service") {
+        const svc = String(p.svc || "").trim();
+        if (svc && svc.indexOf(".") > 0) {
+          const [domain, service] = svc.split(".", 2);
+          const data = (p.data && typeof p.data === "object") ? p.data : {};
+          this.hass?.callService?.(domain, service, data);
+        }
+      } else if (act === "more-info") {
+        this._openMoreInfoEntity?.(entityId);
+      }
+    } catch (_) {}
+
+    this._clearTapConfirmOpen();
+  }
+
+  _renderTapConfirmLock() {
+    try {
+      const sym = String(this._config?.symbol || "").trim().toLowerCase();
+      if (!(sym === "gate" || sym === "garage_door" || sym === "blind")) return html``;
+      if (!this._config?.tap_confirm_open) return html``;
+
+      const p = this._tapConfirmOpen;
+      if (!p || Date.now() > (p.until || 0)) return html``;
+
+      return html`
+        <div class="tapConfirmLock" @click=${(e) => this._onTapConfirmLock(e)} title="Tap to confirm open">
+          <ha-icon .icon=${"mdi:lock"}></ha-icon>
+        </div>
+      `;
+    } catch (_) {
+      return html``;
+    }
+  }
+
+
   _tapEntity(entityId, ev){
     try { ev?.stopPropagation?.(); } catch (e) {}
     try { ev?.preventDefault?.(); } catch (e) {}
 
     const act = String(this._config?.tap_action || 'more-info');
     if (!this.hass || !entityId || act === 'none') return;
+
+    // Safety confirm: when state is closed, first tap shows a lock that must be confirmed within X seconds (Gate/Garage/Blind).
+    try {
+      const sym = String(this._config?.symbol || "").trim().toLowerCase();
+      const confirmOn = !!this._config?.tap_confirm_open;
+      if (confirmOn && (sym === "gate" || sym === "garage_door" || sym === "blind") && (act === "toggle" || act === "call-service")) {
+        const st = this.hass?.states?.[entityId];
+        const raw = st?.state;
+        if (this._isClosedLikeState(raw)) {
+          if (act === "toggle") {
+            this._armTapConfirmOpen({ entityId, act: "toggle" });
+          } else {
+            const svc = String(this._config?.tap_action_service || "").trim();
+            let data = {};
+            const sd = this._config?.tap_action_service_data;
+            if (sd && typeof sd === "object") data = sd;
+            else if (typeof sd === "string" && sd.trim()) {
+              try { data = JSON.parse(sd); } catch (e) { data = {}; }
+            }
+            this._armTapConfirmOpen({ entityId, act: "call-service", svc, data });
+          }
+          return;
+        } else {
+          // If the entity is not closed anymore, clear any pending lock
+          if (this._tapConfirmOpen) this._clearTapConfirmOpen();
+        }
+      }
+    } catch (_) {}
 
     // Predictive animation: for Gate/Garage door/Blind, start moving immediately on tap (useful when the sensor updates state late).
     try {
@@ -2990,7 +3107,18 @@ _drawScaleDom() {
       ? `${baseSym}_modern`
       : baseSym;
 
-    const value1 = this._getStateValue(this._config.entity);
+    let value1 = this._getStateValue(this._config.entity);
+    const rawState1 = this._getRawState(this._config.entity);
+
+    // For Gate / Garage door / Blind: allow non-numeric states like "opening"/"closing"
+    // to be treated as valid (so the card doesn't show "Entity not available").
+    if (value1 === null && rawState1 != null && (sym === "garage_door" || sym === "gate" || sym === "blind")) {
+      const rs = String(rawState1).trim();
+      const rsl = rs.toLowerCase();
+      if (rs !== "" && rsl !== "unknown" && rsl !== "unavailable") {
+        value1 = rs; // keep as string so it can be displayed as-is
+      }
+    }
     const value2 = ((sym === "battery_splitted_segments" || sym === "battery_splitted_segments_modern") || sym === "battery_splitted_segments_modern")
       ? this._getStateValue(this._config.entity2)
       : null;
@@ -3057,7 +3185,7 @@ _drawScaleDom() {
     const valueClass = `value${outlined ? " outlined" : ""}`;
     const splitValueClass = `split-value${outlined ? " outlined" : ""}`;
 
-    const interval = normalizeInterval(this._findIntervalForValue(value1));
+    const interval = normalizeInterval(this._findIntervalForStateOrValue((typeof value1 === "number") ? value1 : null, (rawState1 != null) ? String(rawState1).trim() : null, this._config.intervals));
     // Optional: interval "New value" template can override the displayed value text on the main card
     const intervalNewValueTpl = (interval && interval.new_value != null && String(interval.new_value).trim() !== "")
       ? String(interval.new_value)
@@ -3117,6 +3245,8 @@ _drawScaleDom() {
           </div>
 
           ${this._renderNameOverlay(name)}
+
+          ${this._renderTapConfirmLock()}
 
           ${isImageFull ? this._renderBadgesLayer(false) : ""}
 
@@ -4988,6 +5118,11 @@ _heatpumpSvg(opts) {
           let raw = null;
           if (cp != null && Number.isFinite(Number(cp))) raw = Number(cp);
           if (raw == null) raw = toNumberMaybe(st.state);
+          if (raw == null || !Number.isFinite(Number(raw))) {
+            const s = String(st.state ?? "").trim().toLowerCase();
+            if (s === "open" || s === "opening") raw = maxS;
+            else if (s === "closed" || s === "closing") raw = minS;
+          }
           if (raw != null && Number.isFinite(Number(raw))) return clamp01((Number(raw) - minS) / range);
         }
       } catch (_) {}
@@ -7434,7 +7569,31 @@ _waterLevelSegmentsSvg(opts) {
       }
 
       .sub { opacity:0.7; font-size:12px; padding:4px 0 0; }
-    `;
+    
+      .tapConfirmLock{
+        position:absolute;
+        z-index: 30;
+        top: var(--asc-edge-pad, 10px);
+        right: var(--asc-edge-pad, 10px);
+        width: calc(34px * var(--asc-scale, 1));
+        height: calc(34px * var(--asc-scale, 1));
+        border-radius: 999px;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        background: rgba(0,0,0,0.35);
+        border: 1px solid rgba(255,255,255,0.20);
+        box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+        cursor: pointer;
+        pointer-events:auto;
+        backdrop-filter: blur(6px);
+      }
+      .tapConfirmLock ha-icon{
+        --mdc-icon-size: calc(18px * var(--asc-scale, 1));
+        color: #fff;
+      }
+
+`;
   }
 }
 
@@ -7972,27 +8131,6 @@ const stopBubble = (e) => {
 
     root.appendChild(this._rowMainSvc);
 
-    // For Gate/Garage door/Blind: start animation immediately when you tap (useful when the sensor updates state only when fully closed)
-    this._rowTapStartsAnim = document.createElement("div");
-    this._rowTapStartsAnim.className = "grid2";
-    const tsa = mkSwitch("Tap starts animation (Gate/Garage/Blind)", "tap_starts_animation");
-    this._elTapStartsAnim = tsa.sw;
-    this._rowTapStartsAnim.appendChild(tsa.wrap);
-
-    // Confirm timeout (seconds)
-    const csi = mkText("Confirm state in (seconds)", "tap_confirm_state_in", "number", "10");
-    try { csi.min = 1; csi.step = 1; csi.max = 120; } catch (_) {}
-    this._elTapConfirm = csi;
-    this._rowTapStartsAnim.appendChild(csi);
-
-    const tsaHint = document.createElement("div");
-    tsaHint.className = "hint";
-    tsaHint.innerText = "Starts the open/close animation immediately when you tap. Confirm state in: how long we keep the predictive animation active before trusting the real entity state (useful when the sensor updates late).";
-    this._rowTapStartsAnim.appendChild(tsaHint);
-
-    root.appendChild(this._rowTapStartsAnim);
-
-
     this._updateMainSvcVisibility = () => {
       const act = String(this._config?.tap_action || "more-info");
       const isSvc = (act === "call-service");
@@ -8003,6 +8141,44 @@ const stopBubble = (e) => {
       tfSvcMain.style.display = pickerOn ? "none" : "";
       svcPickerMain.style.display = pickerOn ? "" : "none";
     };
+
+
+    // Safety confirm before opening (Gate/Garage/Blind)
+    this._rowTapConfirmOpen = document.createElement("div");
+    this._rowTapConfirmOpen.className = "grid2";
+    this._rowTapConfirmOpen.style.display = "none";
+
+    const ffConfirm = document.createElement("ha-formfield");
+    ffConfirm.label = "Tap starts unlock (Gate/Garage/Blind)";
+    this._swTapConfirmOpen = document.createElement("ha-switch");
+    this._swTapConfirmOpen.configValue = "tap_confirm_open";
+    this._swTapConfirmOpen.checked = !!this._config?.tap_confirm_open;
+    this._swTapConfirmOpen.addEventListener("change", (e) => this._onChange(e));
+    this._swTapConfirmOpen.addEventListener("value-changed", (e) => this._onChange(e));
+    ffConfirm.appendChild(this._swTapConfirmOpen);
+
+    this._tfTapConfirmOpenWindow = document.createElement("ha-textfield");
+    this._tfTapConfirmOpenWindow.label = "Confirm state in (seconds)";
+    this._tfTapConfirmOpenWindow.type = "number";
+    this._tfTapConfirmOpenWindow.min = "1";
+    this._tfTapConfirmOpenWindow.max = "60";
+    this._tfTapConfirmOpenWindow.step = "1";
+    this._tfTapConfirmOpenWindow.configValue = "tap_confirm_open_window";
+    this._tfTapConfirmOpenWindow.value = String(this._config?.tap_confirm_open_window ?? 10);
+    this._tfTapConfirmOpenWindow.addEventListener("input", (e) => this._onChange(e));
+    this._tfTapConfirmOpenWindow.addEventListener("change", (e) => this._onChange(e));
+    this._tfTapConfirmOpenWindow.addEventListener("click", stopBubble);
+
+    this._rowTapConfirmOpen.appendChild(ffConfirm);
+    this._rowTapConfirmOpen.appendChild(this._tfTapConfirmOpenWindow);
+
+    this._tapConfirmHint = document.createElement("div");
+    this._tapConfirmHint.className = "hint";
+    this._tapConfirmHint.innerText = "When the entity is closed, the first tap shows a lock. Tap the lock within the time window to run the tap action.";
+    this._tapConfirmHint.style.display = "none";
+
+    root.appendChild(this._rowTapConfirmOpen);
+    root.appendChild(this._tapConfirmHint);
 
     this._elEntity2 = mkEntityControl("Second Entity splitted symbol (Battery)", "entity2");
     root.appendChild(this._elEntity2);
@@ -8916,16 +9092,7 @@ varsHead.innerHTML = `
       this._rowIndustrial.style.display = hide ? "none" : "";
       this._swIndustrial.checked = !!this._config.industrial_look;
     
-    
-    // Tap-starts-animation toggle visibility (Gate/Garage door/Blind)
-    if (this._rowTapStartsAnim && this._elTapStartsAnim) {
-      const showTsa = (baseSym === "garage_door" || baseSym === "gate" || baseSym === "blind");
-      this._rowTapStartsAnim.style.display = showTsa ? "" : "none";
-      try { this._elTapStartsAnim.checked = (this._config?.tap_starts_animation ?? true); } catch(_) {}
-      try { if (this._elTapConfirm) this._elTapConfirm.value = String(this._config?.tap_confirm_state_in ?? 10); } catch(_) {}
-    }
-
-// Fan/Heatpump blade count visibility
+    // Fan/Heatpump blade count visibility
     if (this._rowFanBlade && this._elFanBladeCount) {
       const show = (baseSym === "fan" || baseSym === "heatpump");
       this._rowFanBlade.style.display = show ? "" : "none";
@@ -8988,6 +9155,18 @@ if (this._rowBlind && this._elBlindStyle) {
   const showBlind = (baseSym === "blind");
   this._rowBlind.style.display = showBlind ? "" : "none";
   this._elBlindStyle.value = String(this._config.blind_style || "persienne");
+}
+
+// Tap confirm safety visibility (Gate/Garage/Blind)
+if (this._rowTapConfirmOpen && this._swTapConfirmOpen && this._tfTapConfirmOpenWindow) {
+  const showConfirm = (baseSym === "gate" || baseSym === "garage_door" || baseSym === "blind");
+  this._rowTapConfirmOpen.style.display = showConfirm ? "" : "none";
+  if (this._tapConfirmHint) this._tapConfirmHint.style.display = showConfirm ? "" : "none";
+
+  this._swTapConfirmOpen.checked = !!this._config.tap_confirm_open;
+  this._tfTapConfirmOpenWindow.value = String(this._config.tap_confirm_open_window ?? 10);
+  // Only show seconds field when enabled
+  this._tfTapConfirmOpenWindow.style.display = this._swTapConfirmOpen.checked ? "" : "none";
 }
 
 // Image options visibility
@@ -11843,7 +12022,7 @@ _centerBadgePreviewNow(badgeOrObj) {
 
     let value = this._eventValue(ev, target);
 //v1.0.2
-    if (key === "min" || key === "max" || key === "value_font_size" || key === "stats_hours" || key === "card_scale" || key === "tap_confirm_state_in") {
+    if (key === "min" || key === "max" || key === "value_font_size" || key === "stats_hours" || key === "card_scale") {
     //if (key === "min" || key === "max" || key === "value_font_size" || key === "stats_hours") {
     //v1.0.2
       value = value === "" ? 0 : Number(value);
