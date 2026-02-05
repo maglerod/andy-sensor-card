@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.2
+ * Andy Sensor Card v1.0.3
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -18,7 +18,7 @@
 
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.2";
+const CARD_VERSION = "1.0.3";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
 
 
@@ -3173,8 +3173,11 @@ _drawScaleDom() {
 
     const vp = String(this._config.value_position || "top_right");
     const showAnyValue = (vp !== "hide");
-    const showHeaderValue = showAnyValue && (vp === "top_right" || vp === "top_center");
-    const showBottomValue = showAnyValue && (vp === "bottom_right" || vp === "bottom_center");
+    //const showHeaderValue = showAnyValue && (vp === "top_right" || vp === "top_center");
+    const showHeaderValue = showAnyValue && (vp === "top_left" || vp === "top_center" || vp === "top_right");
+    
+    //const showBottomValue = showAnyValue && (vp === "bottom_right" || vp === "bottom_center");
+    const showBottomValue = showAnyValue && (vp === "bottom_left" || vp === "bottom_right" || vp === "bottom_center");    
     const showInsideValue = showAnyValue && (vp === "inside");
 
     const valueStyle = (this._config.value_font_size && Number(this._config.value_font_size) > 0)
@@ -6854,7 +6857,10 @@ _waterLevelSegmentsSvg(opts) {
 
       .header { display:flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: calc(10px * var(--asc-scale, 1)); }
       .header.top_center { justify-content:center; text-align:center; flex-direction:column; align-items:center; }
+      .header.top_right { justify-content: flex-end; text-align: right; }
+      .header.top_left { justify-content: flex-start; text-align: left; }
       .header.empty { margin-bottom: 0; }
+      
 
       .title { font-size: calc(14px * var(--asc-scale, 1)); opacity: 0.9; letter-spacing: 0.2px; }
       .nameOverlay{
@@ -8308,14 +8314,18 @@ const row2 = document.createElement("div");
     const rowVP = document.createElement("div");
     rowVP.className = "grid2";
 
+    
     this._elValuePos = mkSelect("Value position", "value_position", [
-      ["top_right", "Top right"],
+      ["top_left", "Top left"],
       ["top_center", "Top center"],
-      ["bottom_right", "Bottom right"],
+      ["top_right", "Top right"],
+      ["bottom_left", "Bottom left"],
       ["bottom_center", "Bottom center"],
+      ["bottom_right", "Bottom right"],
       ["inside", "Inside icon"],
       ["hide", "Hide"],
-    ]);
+     ]);
+
     rowVP.appendChild(this._elValuePos);
 
     const secTog = document.createElement("div");
@@ -10415,7 +10425,9 @@ tfX.persistentHelperText = true;
 tfX.value = String(this._badgeDraft.x ?? 0);
 tfX.addEventListener("input", (e) => {
   e.stopPropagation();
-  this._badgeDraft.x = Number(tfX.value);
+  //this._badgeDraft.x = Number(tfX.value);
+  //2026-02-5 Added some Safety incase wrong value
+  this._badgeDraft.x = toNum(tfX.value, 0);
   this._applyBadgeDraftPreview(); // move instantly
 });
 rowXY.appendChild(tfX);
@@ -10429,7 +10441,9 @@ tfY.persistentHelperText = true;
 tfY.value = String(this._badgeDraft.y ?? 0);
 tfY.addEventListener("input", (e) => {
   e.stopPropagation();
-  this._badgeDraft.y = Number(tfY.value);
+  //this._badgeDraft.y = Number(tfY.value);
+  //2026-02-5 Added some Safety incase wrong value
+  this._badgeDraft.y = toNum(tfY.value, 0);
   this._applyBadgeDraftPreview(); // move instantly
 });
 rowXY.appendChild(tfY);
@@ -10455,6 +10469,44 @@ const mkNudgeBtn = (icon, label, dx, dy) => {
   const ic = document.createElement("ha-icon");
   ic.setAttribute("icon", icon);
   btn.appendChild(ic);
+  
+  //2026-02-05 Added exception handler if something goes wrong while clicking / moving badge
+  btn.addEventListener("click", (e) => {
+  try {
+    e.stopPropagation();
+    e.preventDefault();
+
+    if (!this._badgeDraft) return;
+
+    const toNum = (v, fallback = 0) => {
+      if (v === "" || v === null || v === undefined) return fallback;
+      const n = Number(String(v).replace(",", "."));
+      return Number.isFinite(n) ? n : fallback;
+    };
+
+    const x0 = toNum(this._badgeDraft.x, 0);
+    const y0 = toNum(this._badgeDraft.y, 0);
+
+    const x1 = x0 + dx;
+    const y1 = y0 + dy;
+
+    this._badgeDraft.x = x1;
+    this._badgeDraft.y = y1;
+
+    if (tfX) tfX.value = String(x1);
+    if (tfY) tfY.value = String(y1);
+
+    this._applyBadgeDraftPreview?.();
+    this._renderBadgesList?.();
+  } catch (err) {
+    console.warn("ASC: badge nudge click failed", err);
+  }
+  });
+
+  
+  
+  
+  /* No exception handler
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     if (!this._badgeDraft) return;
@@ -10467,6 +10519,7 @@ const mkNudgeBtn = (icon, label, dx, dy) => {
     this._applyBadgeDraftPreview();
     this._renderBadgesList();
   });
+  */
   return btn;
 };
 
