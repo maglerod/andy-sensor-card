@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.3
+ * Andy Sensor Card v1.0.4
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -16,11 +16,11 @@
  * 
 */
 
-
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.3";
+const CARD_VERSION = "1.0.4";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
 
+//console.info(CARD_TAGLINE);
 
 console.info(
   `%c${CARD_TAGLINE}`,
@@ -659,6 +659,7 @@ this._gateAnimRaf = 0;
       //v1.0.2
       value_position: "top_right",
       value_font_size: 0,
+      name_font_size: 0,
       outline_value: false,
 
       glass: true,
@@ -803,6 +804,8 @@ const rawSym = String(this._config.symbol || "battery_liquid");
       "gate",
       "image",
       "gas_cylinder",
+      "washing_machine",
+      "tumble_dryer",
     ]);
 
     if (!allowed.has(sym)) sym = "battery_liquid";
@@ -829,7 +832,7 @@ const rawSym = String(this._config.symbol || "battery_liquid");
       "tank",
     ]);
 
-    if (sym === "fan" || sym === "heatpump" || sym === "garage_door" || sym === "blind" || sym === "gate") industrial = false;
+    if (sym === "fan" || sym === "heatpump" || sym === "garage_door" || sym === "blind" || sym === "gate" || sym === "washing_machine" || sym === "tumble_dryer") industrial = false;
     this._config.industrial_look = industrialSupported.has(sym) ? !!industrial : false;
     // Image options normalization
     if (typeof this._config.image_source !== "string") this._config.image_source = "url";
@@ -3173,11 +3176,8 @@ _drawScaleDom() {
 
     const vp = String(this._config.value_position || "top_right");
     const showAnyValue = (vp !== "hide");
-    //const showHeaderValue = showAnyValue && (vp === "top_right" || vp === "top_center");
-    const showHeaderValue = showAnyValue && (vp === "top_left" || vp === "top_center" || vp === "top_right");
-    
-    //const showBottomValue = showAnyValue && (vp === "bottom_right" || vp === "bottom_center");
-    const showBottomValue = showAnyValue && (vp === "bottom_left" || vp === "bottom_right" || vp === "bottom_center");    
+    const showHeaderValue = showAnyValue && (vp === "top_left" || vp === "top_right" || vp === "top_center");
+    const showBottomValue = showAnyValue && (vp === "bottom_left" || vp === "bottom_right" || vp === "bottom_center");
     const showInsideValue = showAnyValue && (vp === "inside");
 
     const valueStyle = (this._config.value_font_size && Number(this._config.value_font_size) > 0)
@@ -3202,7 +3202,12 @@ _drawScaleDom() {
     const stats = this._stats || { min: null, avg: null, max: null, samples: 0 };
 
     const cardScale = Number(this._config.card_scale ?? 1);
-    const scaleVarStyle = `--asc-scale:${cardScale};`;
+    const gapMult = ((this._config.orientation === "horizontal") && ["tank","water_level_segments","ibc_tank"].includes(String(this._config.symbol||"")))
+      ? 0.55 : 1;
+    const edgePadPx = 10 * cardScale * gapMult;
+    const nameFs = Number(this._config.name_font_size || 0);
+    const nameVar = (Number.isFinite(nameFs) && nameFs > 0) ? `--asc-name-font-size:${nameFs}px;` : "";
+    const scaleVarStyle = `--asc-scale:${cardScale};--asc-edge-pad:${edgePadPx}px;--asc-gap-mult:${gapMult};${nameVar}`;
     const statsPos = String(this._config.stats_position || "bottom_center");
     const tallSyms = new Set(["battery_liquid","battery_segments","battery_splitted_segments","gas_cylinder","silo"]);
     const statsPadPx = (showStats && statsPos.startsWith("bottom") && tallSyms.has(baseSym)) ? 0 : 10;
@@ -3661,6 +3666,8 @@ const root = this.renderRoot;
     if (sym === "ibc_tank") return this._ibcTankLiquidSvg(o); //v1.1.5
     if (sym === "fan") return this._fanSvg(o); //v1.2.1
     if (sym === "heatpump") return this._heatpumpSvg(o); //v1.5.6
+    if (sym === "washing_machine") return this._washingMachineSvg(o); //v1.0.6
+    if (sym === "tumble_dryer") return this._tumbleDryerSvg(o); //v1.0.6
     if (sym === "garage_door") return this._garageDoorSvg(o); //v1.6.15
     if (sym === "blind") return this._blindSvg(o); //v1.6.26
     if (sym === "gate") return this._gateSvg(o); //v1.6.30
@@ -5059,8 +5066,202 @@ _heatpumpSvg(opts) {
 }
 
 
+  
   // ---------------------------
-  // Symbol: garage_door 
+  // Symbol: washing_machine
+  // ---------------------------
+  
+_washingMachineSvg(opts) {
+  const { value, interval, glassOn } = opts;
+
+  const it = normalizeInterval(interval);
+
+  const useGradient = !!it.gradient?.enabled;
+  const cSolid = normalizeHex(it.color, "#22c55e");
+  const cScale = normalizeHex(it.scale_color, "#22c55e");
+  
+  const outline = normalizeHex(it.outline, "#ffffff");
+
+  const gFrom = normalizeHex(it.gradient?.from, cSolid);
+  const gTo = normalizeHex(it.gradient?.to, gFrom);
+
+  // Determine "active/running"
+  const raw = (value == null) ? "" : String(value).trim().toLowerCase();
+  const isActive = (typeof value === "number")
+    ? (Number.isFinite(value) ? value > 0 : false)
+    : (raw !== "" && !["off","closed","idle","standby","paused","unknown","unavailable"].includes(raw));
+
+  // Interval-driven speed: if interval.seconds is set, use it as one full rotation duration.
+  let durSec = (it.seconds != null) ? Number(it.seconds) : null;
+  if (!(Number.isFinite(durSec) && durSec > 0)) durSec = 2.2;
+  durSec = Math.max(0.45, Math.min(8.0, durSec));
+
+  const uid = `${this._instanceId}_wm`;
+  const gradId = `wmDrumGrad_${uid}`;
+  const ringId = `wmRingGrad_${uid}`;
+  const drumFill = useGradient ? `url(#${gradId})` : cSolid;
+  const ringFill = `url(#${ringId})`;
+
+  const outerFill = glassOn ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.06)";
+  const innerFill = glassOn ? "rgba(0,0,0,0.16)" : "rgba(0,0,0,0.10)";
+  const frameStroke = isLightHex(outline) ? "rgba(0,0,0,0.70)" : outline;
+
+  const CX = 130, CY = 152;
+  const DOOR_R = 60;
+  const INNER_R = 46;
+
+  const spinStyle = isActive ? `animation-duration:${durSec.toFixed(2)}s; transform-origin:${CX}px ${CY}px;` : `transform-origin:${CX}px ${CY}px;`;
+  const clothesStyle = isActive ? `animation-duration:${Math.max(0.9, durSec*0.55).toFixed(2)}s; transform-origin:${CX}px ${CY}px;` : `transform-origin:${CX}px ${CY}px;`;
+
+  return html`
+    <svg class="sensor-svg" width="100%" height="100%" viewBox="0 0 260 260" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Washing machine">
+      <defs>
+        <linearGradient id="${gradId}" x1="${CX-INNER_R}" y1="${CY-INNER_R}" x2="${CX+INNER_R}" y2="${CY+INNER_R}" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="${gFrom}" stop-opacity="0.98"></stop>
+          <stop offset="55%" stop-color="${gTo}" stop-opacity="0.98"></stop>
+          <stop offset="100%" stop-color="${gFrom}" stop-opacity="0.92"></stop>
+        </linearGradient>
+        <radialGradient id="${ringId}" cx="${CX}" cy="${CY}" r="${DOOR_R+22}" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.16"></stop>
+          <stop offset="58%" stop-color="#ffffff" stop-opacity="0.06"></stop>
+          <stop offset="100%" stop-color="#000000" stop-opacity="0.35"></stop>
+        </radialGradient>
+      </defs>
+
+      <!-- Body -->
+      <rect x="38" y="26" width="184" height="210" rx="22" fill="rgba(255,255,255,0.08)" stroke="${frameStroke}" stroke-width="3"></rect>
+      <rect x="52" y="42" width="156" height="36" rx="10" fill="rgba(0,0,0,0.20)" stroke="rgba(255,255,255,0.08)" stroke-width="1.5"></rect>
+
+      <!-- Status diode (interval color) -->
+      <circle cx="80" cy="60" r="6" fill="${cScale}" opacity="0.95"></circle>
+      <circle cx="80" cy="60" r="10" fill="${cScale}" opacity="0.18"></circle>
+
+      <!-- Door ring -->
+      <circle cx="${CX}" cy="${CY}" r="${DOOR_R+12}" fill="${ringFill}" opacity="0.9"></circle>
+      <circle cx="${CX}" cy="${CY}" r="${DOOR_R+4}" fill="${outerFill}" stroke="rgba(255,255,255,0.10)" stroke-width="2"></circle>
+
+      <!-- Drum -->
+      <circle cx="${CX}" cy="${CY}" r="${DOOR_R}" fill="${innerFill}" stroke="rgba(255,255,255,0.10)" stroke-width="2"></circle>
+      <g class="${isActive ? "asc-wm-spin" : ""}" style="${spinStyle}">
+        <circle cx="${CX}" cy="${CY}" r="${INNER_R}" fill="${drumFill}" opacity="0.86"></circle>
+        <path d="M ${CX-INNER_R} ${CY} A ${INNER_R} ${INNER_R} 0 0 0 ${CX+INNER_R} ${CY}" fill="none" stroke="rgba(0,0,0,0.20)" stroke-width="5"></path>
+        <path d="M ${CX} ${CY-INNER_R} A ${INNER_R} ${INNER_R} 0 0 1 ${CX} ${CY+INNER_R}" fill="none" stroke="rgba(255,255,255,0.10)" stroke-width="4"></path>
+      </g>
+
+      <!-- Clothes blobs -->
+      <g class="${isActive ? "asc-wm-clothes" : ""}" style="${clothesStyle}" opacity="0.95">
+        <path d="M ${CX-18} ${CY-8} C ${CX-36} ${CY-28}, ${CX-42} ${CY-2}, ${CX-28} ${CY+10} C ${CX-10} ${CY+24}, ${CX-2} ${CY+6}, ${CX-8} ${CY-6} C ${CX-12} ${CY-16}, ${CX-10} ${CY-18}, ${CX-18} ${CY-8} Z" fill="#ffffff" fill-opacity="0.10"></path>
+        <path d="M ${CX+14} ${CY-4} C ${CX+30} ${CY-20}, ${CX+44} ${CY-2}, ${CX+32} ${CY+14} C ${CX+18} ${CY+28}, ${CX+6} ${CY+18}, ${CX+10} ${CY+6} C ${CX+12} ${CY-2}, ${CX+8} ${CY-8}, ${CX+14} ${CY-4} Z" fill="#ffffff" fill-opacity="0.12"></path>
+        <circle cx="${CX-22}" cy="${CY+26}" r="7.6" fill="#ffffff" fill-opacity="0.08"></circle>
+        <circle cx="${CX+44}" cy="${CY+36}" r="3.6" fill="#ffffff" fill-opacity="0.10"></circle>
+        <circle cx="${CX+30}" cy="${CY+48}" r="2.4" fill="#ffffff" fill-opacity="0.12"></circle>
+      </g>
+
+      <!-- Feet -->
+      <rect x="62" y="232" width="36" height="10" rx="5" fill="rgba(0,0,0,0.35)"></rect>
+      <rect x="162" y="232" width="36" height="10" rx="5" fill="rgba(0,0,0,0.35)"></rect>
+    </svg>
+  `;
+}
+
+// Symbol: tumble_dryer
+  // ---------------------------
+  
+_tumbleDryerSvg(opts) {
+  const { value, interval, glassOn } = opts;
+
+  const it = normalizeInterval(interval);
+  const useGradient = !!it.gradient?.enabled;
+  const cSolid = normalizeHex(it.color, "#f59e0b");
+  const cScale = normalizeHex(it.scale_color, "#22c55e");
+  const outline = normalizeHex(it.outline, "#ffffff");
+
+  const gFrom = normalizeHex(it.gradient?.from, cSolid);
+  const gTo = normalizeHex(it.gradient?.to, gFrom);
+
+  const raw = (value == null) ? "" : String(value).trim().toLowerCase();
+  const isActive = (typeof value === "number")
+    ? (Number.isFinite(value) ? value > 0 : false)
+    : (raw !== "" && !["off","closed","idle","standby","paused","unknown","unavailable"].includes(raw));
+
+  let durSec = (it.seconds != null) ? Number(it.seconds) : null;
+  if (!(Number.isFinite(durSec) && durSec > 0)) durSec = 2.0;
+  durSec = Math.max(0.40, Math.min(7.0, durSec));
+
+  const uid = `${this._instanceId}_td`;
+  const gradId = `tdDrumGrad_${uid}`;
+  const ringId = `tdRingGrad_${uid}`;
+
+  const CX = 130, CY = 152;
+  const DOOR_R = 60;
+  const INNER_R = 46;
+
+  const drumFill = useGradient ? `url(#${gradId})` : cSolid;
+  const ringFill = `url(#${ringId})`;
+
+  const outerFill = glassOn ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.06)";
+  const innerFill = glassOn ? "rgba(0,0,0,0.15)" : "rgba(0,0,0,0.10)";
+  const frameStroke = isLightHex(outline) ? "rgba(0,0,0,0.70)" : outline;
+
+  const spinStyle = isActive ? `animation-duration:${durSec.toFixed(2)}s; transform-origin:${CX}px ${CY}px;` : `transform-origin:${CX}px ${CY}px;`;
+  const clothesStyle = isActive ? `animation-duration:${Math.max(0.85, durSec*0.50).toFixed(2)}s; transform-origin:${CX}px ${CY}px;` : `transform-origin:${CX}px ${CY}px;`;
+
+  return html`
+    <svg class="sensor-svg" width="100%" height="100%" viewBox="0 0 260 260" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Tumble dryer">
+      <defs>
+        <linearGradient id="${gradId}" x1="${CX-INNER_R}" y1="${CY-INNER_R}" x2="${CX+INNER_R}" y2="${CY+INNER_R}" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="${gFrom}" stop-opacity="0.98"></stop>
+          <stop offset="55%" stop-color="${gTo}" stop-opacity="0.98"></stop>
+          <stop offset="100%" stop-color="${gFrom}" stop-opacity="0.90"></stop>
+        </linearGradient>
+        <radialGradient id="${ringId}" cx="${CX}" cy="${CY}" r="${DOOR_R+22}" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.14"></stop>
+          <stop offset="60%" stop-color="#ffffff" stop-opacity="0.05"></stop>
+          <stop offset="100%" stop-color="#000000" stop-opacity="0.38"></stop>
+        </radialGradient>
+      </defs>
+
+      <!-- Body (slightly different panel) -->
+      <rect x="38" y="26" width="184" height="210" rx="22" fill="rgba(255,255,255,0.07)" stroke="${frameStroke}" stroke-width="3"></rect>
+      <rect x="52" y="42" width="156" height="28" rx="10" fill="rgba(0,0,0,0.18)" stroke="rgba(255,255,255,0.08)" stroke-width="1.5"></rect>
+
+      <!-- Status diode (interval outline + color) -->
+      <circle cx="80" cy="56" r="6" fill="${cScale}" opacity="0.95"></circle>
+      <circle cx="80" cy="56" r="10" fill="${cScale}" opacity="0.22"></circle>
+
+
+      <!-- Heat waves indicator -->
+      <path d="M 72 62 C 82 52, 92 72, 102 62 C 112 52, 122 72, 132 62" fill="none" stroke="${cSolid}" stroke-width="3" opacity="0.65"></path>
+      <path d="M 72 74 C 82 64, 92 84, 102 74 C 112 64, 122 84, 132 74" fill="none" stroke="${cSolid}" stroke-width="3" opacity="0.35"></path>
+
+      <!-- Door ring -->
+      <circle cx="${CX}" cy="${CY}" r="${DOOR_R+12}" fill="${ringFill}" opacity="0.9"></circle>
+      <circle cx="${CX}" cy="${CY}" r="${DOOR_R+4}" fill="${outerFill}" stroke="rgba(255,255,255,0.10)" stroke-width="2"></circle>
+
+      <!-- Drum -->
+      <circle cx="${CX}" cy="${CY}" r="${DOOR_R}" fill="${innerFill}" stroke="rgba(255,255,255,0.10)" stroke-width="2"></circle>
+      <g class="${isActive ? "asc-wm-spin rev" : ""}" style="${spinStyle}">
+        <circle cx="${CX}" cy="${CY}" r="${INNER_R}" fill="${drumFill}" opacity="0.84"></circle>
+        <path d="M ${CX-INNER_R} ${CY} A ${INNER_R} ${INNER_R} 0 0 1 ${CX+INNER_R} ${CY}" fill="none" stroke="rgba(0,0,0,0.22)" stroke-width="5"></path>
+        <path d="M ${CX} ${CY-INNER_R} A ${INNER_R} ${INNER_R} 0 0 0 ${CX} ${CY+INNER_R}" fill="none" stroke="rgba(255,255,255,0.10)" stroke-width="4"></path>
+      </g>
+
+      <!-- Clothes blobs -->
+      <g class="${isActive ? "asc-wm-clothes" : ""}" style="${clothesStyle}" opacity="0.95">
+        <path d="M ${CX-16} ${CY-6} C ${CX-32} ${CY-24}, ${CX-40} ${CY-2}, ${CX-26} ${CY+10} C ${CX-12} ${CY+22}, ${CX-2} ${CY+10}, ${CX-8} ${CY} C ${CX-12} ${CY-10}, ${CX-8} ${CY-14}, ${CX-16} ${CY-6} Z" fill="#ffffff" fill-opacity="0.09"></path>
+        <path d="M ${CX+16} ${CY-2} C ${CX+32} ${CY-18}, ${CX+40} ${CY+2}, ${CX+26} ${CY+14} C ${CX+12} ${CY+26}, ${CX+2} ${CY+14}, ${CX+8} ${CY+4} C ${CX+12} ${CY-4}, ${CX+10} ${CY-8}, ${CX+16} ${CY-2} Z" fill="#ffffff" fill-opacity="0.11"></path>
+        <circle cx="${CX-18}" cy="${CY+24}" r="7.0" fill="#ffffff" fill-opacity="0.08"></circle>
+        <circle cx="${CX+40}" cy="${CY+34}" r="3.4" fill="#ffffff" fill-opacity="0.10"></circle>
+      </g>
+
+      <!-- Feet -->
+      <rect x="62" y="232" width="36" height="10" rx="5" fill="rgba(0,0,0,0.35)"></rect>
+      <rect x="162" y="232" width="36" height="10" rx="5" fill="rgba(0,0,0,0.35)"></rect>
+    </svg>
+  `;
+}
+
+// Symbol: garage_door 
   // ---------------------------
   _garageDoorSvg(opts) {
     const { value, interval } = opts;
@@ -6855,19 +7056,18 @@ _waterLevelSegmentsSvg(opts) {
       .wrap { position: relative; padding: calc(16px * var(--asc-scale, 1)); height: 100%; box-sizing: border-box; }
       :host([data-asc-preview="1"]) .wrap { height: var(--asc-card-height, 100%); }
 
-      .header { display:flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: calc(10px * var(--asc-scale, 1)); }
+      .header { display:flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: calc(10px * var(--asc-scale, 1) * var(--asc-gap-mult, 1)); }
       .header.top_center { justify-content:center; text-align:center; flex-direction:column; align-items:center; }
-      .header.top_right { justify-content: flex-end; text-align: right; }
-      .header.top_left { justify-content: flex-start; text-align: left; }
+      .header.top_left { justify-content:flex-start; text-align:left; }
+      .header.top_right { justify-content:flex-end; text-align:right; }
       .header.empty { margin-bottom: 0; }
-      
 
-      .title { font-size: calc(14px * var(--asc-scale, 1)); opacity: 0.9; letter-spacing: 0.2px; }
+      .title { font-size: calc(var(--asc-name-font-size, 14px) * var(--asc-scale, 1)); opacity: 0.9; letter-spacing: 0.2px; }
       .nameOverlay{
         position:absolute;
         z-index: 6;
         pointer-events:none;
-        font-size: calc(14px * var(--asc-scale, 1));
+        font-size: calc(var(--asc-name-font-size, 14px) * var(--asc-scale, 1));
         opacity: 0.9;
         letter-spacing: 0.2px;
         font-weight: 700;
@@ -7558,12 +7758,13 @@ _waterLevelSegmentsSvg(opts) {
       .split-names.vertical .name1{ left: 24%; }
       .split-names.vertical .name2{ right: 24%; }
 
-      .bottom { margin-top: calc(10px * var(--asc-scale, 1)); display:flex; }
+      .bottom { margin-top: calc(10px * var(--asc-scale, 1) * var(--asc-gap-mult, 1)); display:flex; }
+      .bottom.bottom_left { justify-content:flex-start; text-align:left; }
       .bottom.bottom_center { justify-content:center; text-align:center; }
       .bottom.bottom_right { justify-content:flex-end; text-align:right; }
 
       .statsRow {
-        margin-top: calc(12px * var(--asc-scale, 1));
+        margin-top: calc(12px * var(--asc-scale, 1) * var(--asc-gap-mult, 1));
         width: 100%;
         display:flex;
         flex-wrap: wrap;
@@ -7599,6 +7800,36 @@ _waterLevelSegmentsSvg(opts) {
         color: #fff;
       }
 
+
+
+      /* Washing machine / Tumble dryer drum animation */
+      .asc-wm-spin{
+        animation-name: ascWmSpin;
+        animation-timing-function: linear;
+        animation-iteration-count: infinite;
+        will-change: transform;
+      }
+      .asc-wm-spin.rev{ animation-direction: reverse; }
+
+      .asc-wm-clothes{
+        animation-name: ascWmClothes;
+        animation-timing-function: ease-in-out;
+        animation-iteration-count: infinite;
+        will-change: transform;
+      }
+
+      @keyframes ascWmSpin {
+        from { transform: rotate(0deg); }
+        to   { transform: rotate(360deg); }
+      }
+
+      @keyframes ascWmClothes {
+        0%   { transform: rotate(0deg) translate(0px, 0px); }
+        25%  { transform: rotate(6deg) translate(1px, -1px); }
+        50%  { transform: rotate(0deg) translate(0px, 0px); }
+        75%  { transform: rotate(-6deg) translate(-1px, 1px); }
+        100% { transform: rotate(0deg) translate(0px, 0px); }
+      }
 `;
   }
 }
@@ -7637,6 +7868,7 @@ const DEFAULTS = {
   decimals: 0,
   value_position: "top_right",
   value_font_size: 0,
+      name_font_size: 0,
   glass: true,
   orientation: "vertical",
   fan_blade_count: 3,
@@ -7688,6 +7920,8 @@ class AndySensorCardEditor extends HTMLElement {
 
     const sym = String(incomingRaw.symbol || "battery_liquid").trim().toLowerCase();
 incomingRaw.symbol =
+  (sym === "washing_machine") ? "washing_machine" :
+  (sym === "tumble_dryer") ? "tumble_dryer" :
   (sym === "battery_segments") ? "battery_segments" :
   (sym === "battery_splitted_segments") ? "battery_splitted_segments" :
   (sym === "water_level_segments") ? "water_level_segments" :
@@ -8226,6 +8460,8 @@ const rowSym = document.createElement("div");
       ["ibc_tank", "IBC Tank"], //v1.1.5
       ["fan", "Fan"], //v1.2.0
       ["heatpump", "Heatpump"], //v1.5.6
+      ["washing_machine", "Washing machine"], //v1.0.6
+      ["tumble_dryer", "Tumble dryer"], //v1.0.6
       ["garage_door", "Garage door"], //v1.6.15
       ["blind", "Blind"], //v1.6.26
       ["gate", "Gate"], //v1.6.30
@@ -8290,7 +8526,17 @@ const row2 = document.createElement("div");
     row3.appendChild(this._elMax);
     row3.appendChild(this._elFont);
     root.appendChild(row3);
-    
+
+    const rowNameFont = document.createElement("div");
+    rowNameFont.className = "grid2";
+    this._elNameFont = mkText("Name font size (px) — 0 = auto", "name_font_size", "number", "0");
+    rowNameFont.appendChild(this._elNameFont);
+    // spacer to keep alignment
+    const spacerNF = document.createElement("div");
+    spacerNF.style.visibility = "hidden";
+    rowNameFont.appendChild(spacerNF);
+    root.appendChild(rowNameFont);
+
     //v1.0.2
     const rowScale = document.createElement("div");
     rowScale.className = "grid2";
@@ -8314,18 +8560,14 @@ const row2 = document.createElement("div");
     const rowVP = document.createElement("div");
     rowVP.className = "grid2";
 
-    
     this._elValuePos = mkSelect("Value position", "value_position", [
-      ["top_left", "Top left"],
-      ["top_center", "Top center"],
       ["top_right", "Top right"],
-      ["bottom_left", "Bottom left"],
-      ["bottom_center", "Bottom center"],
+      ["top_center", "Top center"],
       ["bottom_right", "Bottom right"],
+      ["bottom_center", "Bottom center"],
       ["inside", "Inside icon"],
       ["hide", "Hide"],
-     ]);
-
+    ]);
     rowVP.appendChild(this._elValuePos);
 
     const secTog = document.createElement("div");
@@ -8565,7 +8807,7 @@ root.appendChild(rowOpt);
     secInt.className = "section";
     const secTitle = document.createElement("div");
     secTitle.className = "section-title";
-    secTitle.innerText = "Intervals (also used as segment blocks on Battery, garage door, blinds etc.)";
+    secTitle.innerText = "Intervals (also used as segment blocks on Battery, garage door, blinds etc. For wash machine and tumble dryer use seconds field to set speed: quick=1 or lower, slow =3 or higher)";
     secInt.appendChild(secTitle);
 
     const head = document.createElement("div");
@@ -9263,6 +9505,7 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
     this._elMin.value = String(this._config.min ?? 0);
     this._elMax.value = String(this._config.max ?? 100);
     this._elFont.value = String(this._config.value_font_size ?? 0);
+    if (this._elNameFont) this._elNameFont.value = String(this._config.name_font_size ?? 0);
     //v1.0.2
     this._elCardScale.value = String(this._config.card_scale ?? 1);
     //v1.0.2
@@ -9468,7 +9711,8 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
     const grid = document.createElement("div");
     grid.className = "draftGrid2";
 
-    const showSeconds = String(this._config?.symbol || "") === "garage_door";
+    const _symNow = String(this._config?.symbol || "");
+    const showSeconds = (_symNow === "garage_door" || _symNow === "washing_machine" || _symNow === "tumble_dryer");
 
     // Optional static match (exact match, case-insensitive) for non-numeric states
     const tfMatch = document.createElement("ha-textfield");
@@ -10425,9 +10669,7 @@ tfX.persistentHelperText = true;
 tfX.value = String(this._badgeDraft.x ?? 0);
 tfX.addEventListener("input", (e) => {
   e.stopPropagation();
-  //this._badgeDraft.x = Number(tfX.value);
-  //2026-02-5 Added some Safety incase wrong value
-  this._badgeDraft.x = toNum(tfX.value, 0);
+  this._badgeDraft.x = Number(tfX.value);
   this._applyBadgeDraftPreview(); // move instantly
 });
 rowXY.appendChild(tfX);
@@ -10441,9 +10683,7 @@ tfY.persistentHelperText = true;
 tfY.value = String(this._badgeDraft.y ?? 0);
 tfY.addEventListener("input", (e) => {
   e.stopPropagation();
-  //this._badgeDraft.y = Number(tfY.value);
-  //2026-02-5 Added some Safety incase wrong value
-  this._badgeDraft.y = toNum(tfY.value, 0);
+  this._badgeDraft.y = Number(tfY.value);
   this._applyBadgeDraftPreview(); // move instantly
 });
 rowXY.appendChild(tfY);
@@ -10469,44 +10709,6 @@ const mkNudgeBtn = (icon, label, dx, dy) => {
   const ic = document.createElement("ha-icon");
   ic.setAttribute("icon", icon);
   btn.appendChild(ic);
-  
-  //2026-02-05 Added exception handler if something goes wrong while clicking / moving badge
-  btn.addEventListener("click", (e) => {
-  try {
-    e.stopPropagation();
-    e.preventDefault();
-
-    if (!this._badgeDraft) return;
-
-    const toNum = (v, fallback = 0) => {
-      if (v === "" || v === null || v === undefined) return fallback;
-      const n = Number(String(v).replace(",", "."));
-      return Number.isFinite(n) ? n : fallback;
-    };
-
-    const x0 = toNum(this._badgeDraft.x, 0);
-    const y0 = toNum(this._badgeDraft.y, 0);
-
-    const x1 = x0 + dx;
-    const y1 = y0 + dy;
-
-    this._badgeDraft.x = x1;
-    this._badgeDraft.y = y1;
-
-    if (tfX) tfX.value = String(x1);
-    if (tfY) tfY.value = String(y1);
-
-    this._applyBadgeDraftPreview?.();
-    this._renderBadgesList?.();
-  } catch (err) {
-    console.warn("ASC: badge nudge click failed", err);
-  }
-  });
-
-  
-  
-  
-  /* No exception handler
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     if (!this._badgeDraft) return;
@@ -10519,7 +10721,6 @@ const mkNudgeBtn = (icon, label, dx, dy) => {
     this._applyBadgeDraftPreview();
     this._renderBadgesList();
   });
-  */
   return btn;
 };
 
