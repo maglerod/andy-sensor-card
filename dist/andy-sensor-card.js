@@ -8560,9 +8560,11 @@ const row2 = document.createElement("div");
     const rowVP = document.createElement("div");
     rowVP.className = "grid2";
 
-    this._elValuePos = mkSelect("Value position", "value_position", [
+    this._elValuePos = mkSelect("Value position", "value_position", [ 
+      ["top_left", "Top left"],
       ["top_right", "Top right"],
       ["top_center", "Top center"],
+      ["bottom_left", "Bottom left"],
       ["bottom_right", "Bottom right"],
       ["bottom_center", "Bottom center"],
       ["inside", "Inside icon"],
@@ -10501,6 +10503,12 @@ _makeBadgeMiniPreviewEl(badge) {
     const next = (this._config.badges || []).map(normalizeBadge).filter((x) => x.id !== id);
     this._commit("badges", next.map(normalizeBadge));
   }
+  
+_toNum(v, fallback = 0) {
+  if (v === "" || v === null || v === undefined) return fallback;
+  const n = Number(String(v).replace(",", "."));
+  return Number.isFinite(n) ? n : fallback;
+}  
 
   _duplicateBadge(id) {
     const cur = (this._config.badges || []).map(normalizeBadge);
@@ -10669,7 +10677,8 @@ tfX.persistentHelperText = true;
 tfX.value = String(this._badgeDraft.x ?? 0);
 tfX.addEventListener("input", (e) => {
   e.stopPropagation();
-  this._badgeDraft.x = Number(tfX.value);
+  //this._badgeDraft.x = Number(tfX.value);
+  this._badgeDraft.y = this._toNum(tfX.value, 0);
   this._applyBadgeDraftPreview(); // move instantly
 });
 rowXY.appendChild(tfX);
@@ -10683,7 +10692,8 @@ tfY.persistentHelperText = true;
 tfY.value = String(this._badgeDraft.y ?? 0);
 tfY.addEventListener("input", (e) => {
   e.stopPropagation();
-  this._badgeDraft.y = Number(tfY.value);
+  this._badgeDraft.y = this._toNum(tfY.value, 0);
+  //this._badgeDraft.y = Number(tfY.value);
   this._applyBadgeDraftPreview(); // move instantly
 });
 rowXY.appendChild(tfY);
@@ -10709,6 +10719,38 @@ const mkNudgeBtn = (icon, label, dx, dy) => {
   const ic = document.createElement("ha-icon");
   ic.setAttribute("icon", icon);
   btn.appendChild(ic);
+  
+  //2026-02-05 Added exception handler if something goes wrong while clicking / moving badge
+  btn.addEventListener("click", (e) => {
+  try {
+    e.stopPropagation();
+    e.preventDefault();
+
+    if (!this._badgeDraft) return;
+
+    const x0 = this._toNum(this._badgeDraft.x, 0);
+    const y0 = this._toNum(this._badgeDraft.y, 0);
+
+    const x1 = x0 + dx;
+    const y1 = y0 + dy;
+
+    this._badgeDraft.x = x1;
+    this._badgeDraft.y = y1;
+
+    if (tfX) tfX.value = String(x1);
+    if (tfY) tfY.value = String(y1);
+
+    this._applyBadgeDraftPreview?.();
+    this._renderBadgesList?.();
+  } catch (err) {
+    console.warn("ASC: badge nudge click failed", err);
+  }
+  });
+  
+  
+  /* No exception handler
+  
+  /*
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     if (!this._badgeDraft) return;
@@ -10720,7 +10762,7 @@ const mkNudgeBtn = (icon, label, dx, dy) => {
     tfY.value = String(this._badgeDraft.y);
     this._applyBadgeDraftPreview();
     this._renderBadgesList();
-  });
+  });*/
   return btn;
 };
 
