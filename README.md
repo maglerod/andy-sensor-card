@@ -6,7 +6,7 @@ A **highly configurable** Home Assistant Lovelace card that renders **advanced S
 
 ![Preview 1_0_5](Images/fan.png)
 ![Preview 1_0_5_2](Images/heatpump.png)
-![Preview 1_0_5ws](Images/washmaschine.png)
+![Preview 1_0_5ws](Images/washmachine.png)
 ![Preview 1_0_5_2ws](Images/washmachineon.png)
 ![Preview 1_0_5_3](Images/battery_splitted_horizontal.png)
 ![Preview 1_0_5_4](Images/garagedoor_wide.png)
