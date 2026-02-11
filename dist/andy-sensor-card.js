@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.4
+ * Andy Sensor Card v1.0.5
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -17,7 +17,7 @@
 */
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.4";
+const CARD_VERSION = "1.0.5";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
 
 //console.info(CARD_TAGLINE);
@@ -77,6 +77,19 @@ function normalizeHex(s, fallback = "#22c55e") {
   const t = String(s).trim();
   return isHexColor(t) ? t : fallback;
 }
+
+function escapeHtml(s) {
+  // Minimal HTML escape for future-proofing when inserting dynamic text into innerHTML.
+  // Prefer textContent when possible.
+  const str = String(s ?? "");
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 
 // Prevent clicks/inputs from bubbling up and stealing focus (HA editor quirks)
 function stopBubble(e) {
@@ -241,6 +254,11 @@ function normalizeBadge(b) {
 
   out.font_size = Number(out.font_size);
   if (!Number.isFinite(out.font_size)) out.font_size = 12;
+
+  // Optional fixed width for badge (px). When set, badge keeps constant width regardless of label length.
+  out.fixed_width_px = Number(out.fixed_width_px);
+  if (!Number.isFinite(out.fixed_width_px) || out.fixed_width_px <= 0) out.fixed_width_px = null;
+  if (out.fixed_width_px != null) out.fixed_width_px = Math.max(20, Math.min(400, Math.round(out.fixed_width_px)));
 
   // Badge icon size (px). This is independent from the badge font size.
   // Allows enlarging the icon without making the whole badge bigger.
@@ -677,6 +695,10 @@ this._gateAnimRaf = 0;
       tap_confirm_open: false,
       tap_confirm_open_window: 10,
       name_position: "top_left",
+  name_offset_x: 0,
+  name_offset_y: 0,
+  value_offset_x: 0,
+  value_offset_y: 0,
       stats_position: "bottom_center",
 
       show_scale: false,
@@ -689,6 +711,7 @@ this._gateAnimRaf = 0;
       garage_door_entity2: "", // Garage door only: Door 2 position entity (optional)
       garage_door_lamp_entity: "", // Garage door only: Lamp entity for door 1 (optional)
       garage_door_lamp_entity2: "", // Garage door only: Lamp entity for door 2 (optional)
+      window_lamp_opacity: 0.5, // Window (Blind style "window") lamp glow opacity (0..1 or 0..100)
       // Image only
       image_source: "url", // Image only: url | media
       image_url: "", // URL/path to image (e.g. /local/my-image.png or https://...)
@@ -775,7 +798,8 @@ scale_color_mode: "per_interval",
 // Blind style (only used by blind)
     {
       const bsRaw = (this._config.blind_style == null) ? "persienne" : String(this._config.blind_style).trim().toLowerCase();
-      this._config.blind_style = (bsRaw === "lamella" || bsRaw === "lamell") ? "lamella" : "persienne";
+      this._config.blind_style = (bsRaw === "window") ? "window" : ((bsRaw === "lamella" || bsRaw === "lamell") ? "lamella" : "persienne");
+      if (this._config.blind_position_entity == null) this._config.blind_position_entity = "";
     }
 
 const rawSym = String(this._config.symbol || "battery_liquid");
@@ -885,9 +909,9 @@ const rawSym = String(this._config.symbol || "battery_liquid");
       this._config.image_dim_off_opacity = Math.max(0, Math.min(1, doo));
     }
     // v1.0.2 card_scale clamp
-    let cs = Number(this._config.card_scale ?? 1);
+    let cs = toNumberMaybe(this._config.card_scale);
     if (!Number.isFinite(cs) || cs <= 0) cs = 1;
-    this._config.card_scale = Math.max(0.2, Math.min(2.0, cs));
+    this._config.card_scale = Math.max(0.2, Math.min(4.0, cs));
     // v1.0.2 card_scale clamp
 
     if (!Array.isArray(this._config.intervals) || this._config.intervals.length === 0) {
@@ -1179,37 +1203,52 @@ _applyInsideValueY() {
       }
     } catch (_) {}
   }
-
-
-
-  updated(changedProps) {
-    if (changedProps.has("hass") || changedProps.has("_config")) {
-      this._maybeUpdateStats();
-    }
-    if (changedProps.has("hass") || changedProps.has("_config") || changedProps.has("_stats")) {
-      this._drawScaleDom();
-      this._drawSegmentsDom(); 
-    }
-    
-    if (this._config?.value_position === "inside") {
-    this._applyInsideValueY();
-    }
-    
-  
-
-    this._fanSyncAnimation();
-
-    this._badgeSymbolSyncDom();
-
-    this._garageSyncDom();
-
-    this._gateSyncDom();
-
-    // Keep preview scroll position stable in HA visual editor (Image symbol)
-    this._syncPreviewScrollPersistence();
-
+updated(changedProps) {
+  if (changedProps.has("hass") || changedProps.has("_config")) {
+    this._maybeUpdateStats();
   }
-  
+  if (changedProps.has("hass") || changedProps.has("_config") || changedProps.has("_stats")) {
+    this._drawScaleDom();
+    this._drawSegmentsDom();
+  }
+
+  if (this._config?.value_position === "inside") {
+    this._applyInsideValueY();
+  }
+
+  // Performance: only run symbol-specific DOM sync logic when relevant.
+  const sym = String(this._config?.symbol || "battery_liquid");
+
+  if (sym === "fan" || sym === "heatpump") {
+    this._fanSyncAnimation();
+  } else {
+    try { this._fanStopAnimation(); } catch (_) {}
+  }
+
+  // Badge symbol DOM injection is only needed when badges render pending SVG markups.
+  const pendingB = this._bdgSymPending;
+  if (pendingB && Object.keys(pendingB).length) {
+    this._badgeSymbolSyncDom();
+  } else {
+    try { this._badgeSymbolStop(); } catch (_) {}
+  }
+
+  if (sym === "garage_door" || sym === "blind") {
+    this._garageSyncDom();
+  } else {
+    try { this._garageStopAnimation(); } catch (_) {}
+  }
+
+  if (sym === "gate") {
+    this._gateSyncDom();
+  } else {
+    try { this._gateStopAnimation(); } catch (_) {}
+  }
+
+  // Keep preview scroll position stable in HA visual editor (Image symbol)
+  this._syncPreviewScrollPersistence();
+}
+
   disconnectedCallback() {
     try { this._fanStopAnimation(); } catch (_) {}
     try { this._badgeSymbolStop(); } catch (_) {}
@@ -2442,7 +2481,7 @@ _onBadgeSliderChange(ev, badge) {
   _renderTapConfirmLock() {
     try {
       const sym = String(this._config?.symbol || "").trim().toLowerCase();
-      if (!(sym === "gate" || sym === "garage_door" || sym === "blind")) return html``;
+      if (!(sym === "gate" || sym === "garage_door" || (sym === "blind" && String(this._config?.blind_style || "persienne").trim().toLowerCase() !== "window"))) return html``;
       if (!this._config?.tap_confirm_open) return html``;
 
       const p = this._tapConfirmOpen;
@@ -2470,7 +2509,7 @@ _onBadgeSliderChange(ev, badge) {
     try {
       const sym = String(this._config?.symbol || "").trim().toLowerCase();
       const confirmOn = !!this._config?.tap_confirm_open;
-      if (confirmOn && (sym === "gate" || sym === "garage_door" || sym === "blind") && (act === "toggle" || act === "call-service")) {
+      if (confirmOn && (sym === "gate" || sym === "garage_door" || (sym === "blind" && String(this._config?.blind_style || "persienne").trim().toLowerCase() !== "window")) && (act === "toggle" || act === "call-service")) {
         const st = this.hass?.states?.[entityId];
         const raw = st?.state;
         if (this._isClosedLikeState(raw)) {
@@ -2797,6 +2836,7 @@ const styleVars = [
           `--asc-bdg-img-radius:${imgRadius}px;`,
           `--asc-bdg-img-frame-w:${imgFrameW}px;`,
           `--asc-bdg-img-frame-c:${imgFrameC};`,
+          (b.fixed_width_px != null) ? `--asc-bdg-fixed-w:${b.fixed_width_px}px;` : ``,
         ].join("");
 
         const iconOnly = !!b.icon_only || !String(label || "").trim();
@@ -2815,7 +2855,7 @@ const styleVars = [
 
         const spinDir = spin ? ((b.style === "recycle_left") ? "spinLeft" : "spinRight") : "";
 
-        const cls = `asc-badge ${b.style} ${iconOnly ? "iconOnly" : ""} ${flow ? "flowAnim" : ""} ${spin ? "recycleSpin" : ""} ${spinDir} ${dirClass} ${vert ? "vertTxt" : ""}`.trim();
+        const cls = `asc-badge ${b.style} ${(b.fixed_width_px != null) ? "fixedW" : ""} ${iconOnly ? "iconOnly" : ""} ${flow ? "flowAnim" : ""} ${spin ? "recycleSpin" : ""} ${spinDir} ${dirClass} ${vert ? "vertTxt" : ""}`.trim();
 
         
 
@@ -3207,7 +3247,11 @@ _drawScaleDom() {
     const edgePadPx = 10 * cardScale * gapMult;
     const nameFs = Number(this._config.name_font_size || 0);
     const nameVar = (Number.isFinite(nameFs) && nameFs > 0) ? `--asc-name-font-size:${nameFs}px;` : "";
-    const scaleVarStyle = `--asc-scale:${cardScale};--asc-edge-pad:${edgePadPx}px;--asc-gap-mult:${gapMult};${nameVar}`;
+    const nox = toNumberMaybe(this._config.name_offset_x) ?? 0;
+    const noy = toNumberMaybe(this._config.name_offset_y) ?? 0;
+    const vox = toNumberMaybe(this._config.value_offset_x) ?? 0;
+    const voy = toNumberMaybe(this._config.value_offset_y) ?? 0;
+    const scaleVarStyle = `--asc-scale:${cardScale};--asc-edge-pad:${edgePadPx}px;--asc-gap-mult:${gapMult};${nameVar}--asc-name-off-x:${nox}px;--asc-name-off-y:${noy}px;--asc-value-off-x:${vox}px;--asc-value-off-y:${voy}px;`;
     const statsPos = String(this._config.stats_position || "bottom_center");
     const tallSyms = new Set(["battery_liquid","battery_segments","battery_splitted_segments","gas_cylinder","silo"]);
     const statsPadPx = (showStats && statsPos.startsWith("bottom") && tallSyms.has(baseSym)) ? 0 : 10;
@@ -5590,7 +5634,313 @@ _tumbleDryerSvg(opts) {
       return (raw != null && Number.isFinite(Number(raw))) ? clamp01((Number(raw) - minS) / range) : 0;
     };
 
-    // Targets (door 1 + optional door 2)
+    
+    // --- Blind style: Window (front view window + venetian overlay) ---
+    const blindStyleMode = String(this._config?.blind_style || "persienne").trim().toLowerCase();
+    if (blindStyleMode === "window") {
+      // NOTE: For Window style:
+// - Main entity drives OPEN/CLOSED only (visual). It must NOT affect blind position.
+// - Blind position is driven ONLY by blind_position_entity (and blind_position_entity2 for double).
+const garageType = String(this._config?.garage_door_type || "single").trim().toLowerCase();
+const isDouble = (garageType === "double");
+
+const _winIsOpenFromId = (eid) => {
+  const id = String(eid || "").trim();
+  if (!id) return false;
+  const st = this.hass?.states?.[id];
+  const s = (st?.state == null) ? "" : String(st.state).trim().toLowerCase();
+  return (s === "open" || s === "opening" || s === "on" || s === "true" || s === "tilted" || s === "ventilation");
+};
+
+const mainId1 = String(this._config?.entity || "").trim();
+const mainId2 = String(this._config?.garage_door_entity2 || "").trim(); // reused key (Blind double)
+const mainStateRaw1 = mainId1 ? (this.hass?.states?.[mainId1]?.state) : null;
+const mainStateRaw2 = mainId2 ? (this.hass?.states?.[mainId2]?.state) : null;
+
+const isOpen1 = _winIsOpenFromId(mainId1);
+const isOpen2 = isDouble ? _winIsOpenFromId(mainId2 || mainId1) : false;
+
+// Blind position entity drives venetian coverage (0..100, where 0 = fully up/open, 100 = fully down/closed)
+      const _winPDownFromPosId = (eid) => {
+  try {
+    const id = String(eid || "").trim();
+    if (!id || !this.hass?.states?.[id]) return 0;
+    const st = this.hass.states[id];
+    const dom = String(id).split(".")[0] || "";
+    const cp = st?.attributes?.current_position;
+    const clamp01 = (x) => Math.max(0, Math.min(1, x));
+    const toNum = (v) => {
+      if (v == null) return null;
+      const s0 = String(v).trim();
+      if (!s0) return null;
+      const m = s0.match(/-?\d+(?:[\.,]\d+)?/);
+      const s = m ? m[0] : s0;
+      const n = Number(String(s).replace(",", "."));
+      return Number.isFinite(n) ? n : null;
+    };
+
+    if (cp != null) {
+      const n = toNum(cp);
+      if (n != null) {
+        const pOpen = clamp01(n / 100); // HA cover: 0=closed, 100=open
+        return (dom === "cover") ? (1 - pOpen) : pOpen;
+      }
+    }
+
+    const nState = toNum(st.state);
+    if (nState != null) {
+      if (nState >= 0 && nState <= 1) return clamp01(nState);
+      if (nState >= 0 && nState <= 100) return clamp01(nState / 100); // assume 0=up/open, 100=down/closed
+    }
+
+    const s = String(st.state ?? "").trim().toLowerCase();
+    if (s === "open" || s === "opening" || s === "on" || s === "true") return 0;
+    if (s === "closed" || s === "closing" || s === "off" || s === "false") return 1;
+  } catch (_) {}
+  return 0;
+};
+
+const posId1 = String(this._config?.blind_position_entity || "").trim();
+const posId2 = String(this._config?.blind_position_entity2 || "").trim();
+
+const pDown1 = _winPDownFromPosId(posId1);
+const pDown2 = isDouble ? _winPDownFromPosId(posId2 || posId1) : 0;
+
+const posPct1 = Math.round(pDown1 * 100);
+const posPct2 = Math.round(pDown2 * 100);
+
+// Lamp glow behind glass (optional)
+const lamp1Id = String(this._config?.garage_door_lamp_entity || "").trim()
+  || String(this._config?.entity2 || "").trim(); // legacy fallback
+const lamp2Id = String(this._config?.garage_door_lamp_entity2 || "").trim();
+const lampOn1 = this._isOnLikeState(lamp1Id);
+const lampOn2 = isDouble ? this._isOnLikeState(lamp2Id || lamp1Id) : false;
+
+// User-controlled window lamp glow opacity
+let _wLampOp = Number(this._config?.window_lamp_opacity);
+if (!Number.isFinite(_wLampOp)) _wLampOp = 0.5;
+// Allow 0..100 as percent
+if (_wLampOp > 1.0001) _wLampOp = _wLampOp / 100;
+const windowLampOpacity = clamp01(_wLampOp);
+
+// Colors:
+      // - Main entity interval controls window frame accent (open/closed state)
+      // - Position interval controls slat tint (0..100)
+      const itMain1 = normalizeInterval(this._findIntervalForStateOrValue(null, (mainStateRaw1 == null ? null : String(mainStateRaw1).trim()), this._config?.intervals));
+const itMain2 = isDouble
+  ? normalizeInterval(this._findIntervalForStateOrValue(null, (mainStateRaw2 == null ? null : String(mainStateRaw2).trim()), this._config?.intervals))
+  : itMain1;
+
+// Frame uses interval fill; glass stays glass/transparent.
+const frameFill1 = normalizeFillColor(itMain1.color || itMain1.fill, "rgba(245,245,245,1)");
+const frameAccent1 = normalizeFillColor(itMain1.outline || itMain1.color, "rgba(0,0,0,0.26)");
+const frameFill2 = normalizeFillColor((itMain2?.color || itMain2?.fill), frameFill1);
+const frameAccent2 = normalizeFillColor((itMain2?.outline || itMain2?.color), frameAccent1);
+
+const itPos1 = normalizeInterval(this._findIntervalForStateOrValue(posPct1, null, this._config?.intervals));
+const slatTint1 = normalizeFillColor(itPos1.color, "#d8d8d8");
+
+const itPos2 = isDouble
+  ? normalizeInterval(this._findIntervalForStateOrValue(posPct2, null, this._config?.intervals))
+  : itPos1;
+const slatTint2 = normalizeFillColor(itPos2.color, "#d8d8d8");
+
+// Geometry: reuse existing blind/garage layout constants
+
+      const buildOne = (openX, openFlag, frameFill, frameAccent, slatTint, pDown, lampOn) => {
+        const IN_X = openX + TRIM;
+        const IN_W = OPEN_W - TRIM * 2;
+
+        // Split into two panes
+        const midX = IN_X + IN_W / 2;
+        const panePad = 1.6;
+        const paneW = (IN_W / 2) - panePad;
+
+        // Glass rects
+        const gY = IN_Y + 2.0;
+        const gH = IN_H - 4.0;
+
+        const leftX = IN_X + panePad;
+        const rightX = midX + panePad * 0.5;
+
+        // Blind coverage (from top down)
+        const coverH = Math.max(0, Math.min(IN_H, pDown * IN_H));
+
+        const clipId = `ascWinClip_${uidBase}_${openX}`;
+        const glassGradId = `ascWinGlass_${uidBase}_${openX}`;
+        const glassHiId = `ascWinGlassHi_${uidBase}_${openX}`;
+        const glowGradId = `ascWinGlow_${uidBase}_${openX}`;
+        const glowRadId = `ascWinGlowRad_${uidBase}_${openX}`;
+
+        const defs = `
+          <clipPath id="${clipId}">
+            <rect x="${IN_X.toFixed(2)}" y="${IN_Y.toFixed(2)}" width="${IN_W.toFixed(2)}" height="${coverH.toFixed(2)}"></rect>
+          </clipPath>
+          <linearGradient id="${glassGradId}" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="rgba(200,232,255,0.12)"></stop>
+            <stop offset="0.55" stop-color="rgba(170,215,250,0.06)"></stop>
+            <stop offset="1" stop-color="rgba(120,190,240,0.10)"></stop>
+          </linearGradient>
+          <radialGradient id="${glassHiId}" cx="35%" cy="20%" r="70%">
+            <stop offset="0" stop-color="rgba(255,255,255,0.14)"></stop>
+            <stop offset="0.45" stop-color="rgba(255,255,255,0.05)"></stop>
+            <stop offset="1" stop-color="rgba(255,255,255,0)"></stop>
+          </radialGradient>
+<linearGradient id="${glowGradId}" x1="0" y1="0" x2="0" y2="1">
+  <stop offset="0" stop-color="rgba(255,238,200,0.18)"></stop>
+  <stop offset="0.40" stop-color="rgba(255,214,137,0.10)"></stop>
+  <stop offset="1" stop-color="rgba(255,214,137,0)"></stop>
+</linearGradient>
+<radialGradient id="${glowRadId}" cx="50%" cy="10%" r="70%">
+  <stop offset="0" stop-color="rgba(255,244,210,0.16)"></stop>
+  <stop offset="0.55" stop-color="rgba(255,214,137,0.10)"></stop>
+  <stop offset="1" stop-color="rgba(255,214,137,0)"></stop>
+</radialGradient>
+        `;
+
+        // Glow (behind glass) - top-down like Garage room light (subtle)
+const glowOpacity = lampOn ? windowLampOpacity : 0;
+const glow = `
+  <g opacity="${glowOpacity}">
+    <rect x="${IN_X.toFixed(2)}" y="${IN_Y.toFixed(2)}" width="${IN_W.toFixed(2)}" height="${IN_H.toFixed(2)}" fill="url(#${glowGradId})"></rect>
+    <rect x="${IN_X.toFixed(2)}" y="${IN_Y.toFixed(2)}" width="${IN_W.toFixed(2)}" height="${IN_H.toFixed(2)}" fill="url(#${glowRadId})"></rect>
+  </g>
+`;
+// Venetian slats (only drawn inside cover clip; gaps are transparent so glow can be seen)
+        const slatH = 7.0;
+        const count = Math.max(10, Math.floor(IN_H / slatH));
+        const x0 = IN_X + 3;
+        const x1 = IN_X + IN_W - 3;
+
+        let slats = "";
+        for (let i = 0; i < count; i++) {
+          const yy = IN_Y + i * (IN_H / count);
+          const h = (IN_H / count);
+          const gap = Math.max(1.6, h * 0.28);
+          const slatFillH = Math.max(2.8, h - gap);
+          const tilt = 1.15;
+          slats += `
+            <path d="M ${x0.toFixed(2)} ${yy.toFixed(2)}
+                     L ${x1.toFixed(2)} ${(yy + tilt).toFixed(2)}
+                     L ${x1.toFixed(2)} ${(yy + slatFillH).toFixed(2)}
+                     L ${x0.toFixed(2)} ${(yy + slatFillH - tilt).toFixed(2)} Z"
+                  fill="${slatTint}" opacity="0.38"></path>
+            <line x1="${x0.toFixed(2)}" y1="${(yy + 1).toFixed(2)}" x2="${x1.toFixed(2)}" y2="${(yy + 1 + tilt).toFixed(2)}"
+                  stroke="rgba(255,255,255,0.18)" stroke-width="1"></line>
+            <line x1="${x0.toFixed(2)}" y1="${(yy + slatFillH - 1).toFixed(2)}" x2="${x1.toFixed(2)}" y2="${(yy + slatFillH - 1 + tilt).toFixed(2)}"
+                  stroke="rgba(0,0,0,0.16)" stroke-width="1"></line>
+          `;
+        }
+
+        // Open sash illusion (front view) — left pane opens "toward you"
+        const sashClosed = `
+          <rect x="${leftX.toFixed(2)}" y="${gY.toFixed(2)}" width="${paneW.toFixed(2)}" height="${gH.toFixed(2)}"
+                fill="rgba(0,0,0,0)" stroke="rgba(0,0,0,0.24)" stroke-width="2"></rect>
+        `;
+
+        const sashOpen = `
+          <polygon points="
+            ${(leftX - 2).toFixed(2)},${(gY + 2).toFixed(2)}
+            ${(leftX + paneW - 10).toFixed(2)},${(gY + 10).toFixed(2)}
+            ${(leftX + paneW - 10).toFixed(2)},${(gY + gH - 10).toFixed(2)}
+            ${(leftX - 2).toFixed(2)},${(gY + gH - 2).toFixed(2)}"
+            fill="rgba(255,255,255,0.06)" stroke="rgba(0,0,0,0.24)" stroke-width="2"></polygon>
+          <polygon points="
+            ${(leftX + paneW - 10).toFixed(2)},${(gY + 10).toFixed(2)}
+            ${(leftX + paneW + 2).toFixed(2)},${(gY + 4).toFixed(2)}
+            ${(leftX + paneW + 2).toFixed(2)},${(gY + gH - 4).toFixed(2)}
+            ${(leftX + paneW - 10).toFixed(2)},${(gY + gH - 10).toFixed(2)}"
+            fill="rgba(0,0,0,0.10)"></polygon>
+        `;
+
+        const markup = `
+          <g>
+            <!-- Outer frame (bars only so glass is never tinted by frame fill) -->
+<rect x="${openX}" y="${OPEN_Y}" width="${OPEN_W}" height="${OPEN_H}"
+      fill="none" stroke="${frameAccent}" stroke-width="2.2"></rect>
+
+<!-- Frame bars -->
+<rect x="${openX}" y="${OPEN_Y}" width="${OPEN_W}" height="12"
+      fill="${frameFill}" stroke="rgba(0,0,0,0.18)" stroke-width="1.2"></rect>
+<rect x="${openX}" y="${(OPEN_Y + 12).toFixed(2)}" width="12" height="${(OPEN_H - 12).toFixed(2)}"
+      fill="${frameFill}" stroke="rgba(0,0,0,0.18)" stroke-width="1.2"></rect>
+<rect x="${(openX + OPEN_W - 12).toFixed(2)}" y="${(OPEN_Y + 12).toFixed(2)}" width="12" height="${(OPEN_H - 12).toFixed(2)}"
+      fill="${frameFill}" stroke="rgba(0,0,0,0.18)" stroke-width="1.2"></rect>
+
+<!-- Inner opening -->
+<rect x="${(openX + 12).toFixed(2)}" y="${(OPEN_Y + 12).toFixed(2)}" width="${(OPEN_W - 24).toFixed(2)}" height="${(OPEN_H - 24).toFixed(2)}"
+      fill="rgba(0,0,0,0.02)" stroke="rgba(0,0,0,0.20)" stroke-width="2.0"></rect>
+
+<!-- Sill -->
+<rect x="${(openX + 2).toFixed(2)}" y="${(OPEN_Y + OPEN_H - 20).toFixed(2)}" width="${(OPEN_W - 4).toFixed(2)}" height="22"
+      fill="${frameFill}" opacity="0.92" stroke="rgba(0,0,0,0.18)" stroke-width="1.2"></rect>
+
+<!-- Glass area base (neutral, not interval-tinted) -->
+<rect x="${IN_X.toFixed(2)}" y="${IN_Y.toFixed(2)}" width="${IN_W.toFixed(2)}" height="${IN_H.toFixed(2)}"
+      fill="rgba(18,28,40,0.05)"></rect>
+            ${glow}
+            <!-- Glass panes: transparent, with subtle glass tint + highlight so lamp glow can be seen -->
+            <rect x="${leftX.toFixed(2)}" y="${gY.toFixed(2)}" width="${paneW.toFixed(2)}" height="${gH.toFixed(2)}"
+                  fill="url(#${glassGradId})" opacity="0.18" stroke="rgba(0,0,0,0.12)" stroke-width="1"></rect>
+            <rect x="${rightX.toFixed(2)}" y="${gY.toFixed(2)}" width="${paneW.toFixed(2)}" height="${gH.toFixed(2)}"
+                  fill="url(#${glassGradId})" opacity="0.18" stroke="rgba(0,0,0,0.12)" stroke-width="1"></rect>
+            <rect x="${leftX.toFixed(2)}" y="${gY.toFixed(2)}" width="${paneW.toFixed(2)}" height="${gH.toFixed(2)}" fill="url(#${glassHiId})"></rect>
+            <rect x="${rightX.toFixed(2)}" y="${gY.toFixed(2)}" width="${paneW.toFixed(2)}" height="${gH.toFixed(2)}" fill="url(#${glassHiId})"></rect>
+<!-- Center mullion -->
+            <rect x="${(midX - 2.0).toFixed(2)}" y="${IN_Y.toFixed(2)}" width="4.0" height="${IN_H.toFixed(2)}"
+                  fill="${frameFill}" opacity="0.90" stroke="rgba(0,0,0,0.14)" stroke-width="1"></rect>
+
+            <!-- Sashes -->
+            ${openFlag ? sashOpen : sashClosed}
+            <rect x="${rightX.toFixed(2)}" y="${gY.toFixed(2)}" width="${paneW.toFixed(2)}" height="${gH.toFixed(2)}"
+                  fill="rgba(0,0,0,0)" stroke="rgba(0,0,0,0.24)" stroke-width="2"></rect>
+
+            <!-- Handle (center, window-style) -->
+            <g transform="translate(${(midX - 2).toFixed(2)} ${(IN_Y + IN_H*0.49).toFixed(2)}) rotate(-12)">
+              <rect x="-2.2" y="-16" width="6.0" height="28" rx="2.2"
+                    fill="rgba(255,255,255,0.92)" stroke="rgba(0,0,0,0.25)" stroke-width="0.9"></rect>
+              <rect x="1.6" y="-10" width="9.5" height="5.2" rx="2.2"
+                    fill="rgba(255,255,255,0.92)" stroke="rgba(0,0,0,0.22)" stroke-width="0.9"></rect>
+              <circle cx="0.8" cy="-12.6" r="1.0" fill="rgba(0,0,0,0.18)"></circle>
+            </g>
+
+            <!-- Venetian blind (clip to coverage) -->
+            <g clip-path="url(#${clipId})">
+              ${slats}
+            </g>
+
+            <!-- Top rail -->
+            <rect x="${IN_X.toFixed(2)}" y="${(IN_Y - 9).toFixed(2)}" width="${IN_W.toFixed(2)}" height="10"
+                  fill="rgba(0,0,0,0.10)"></rect>
+            <rect x="${IN_X.toFixed(2)}" y="${(IN_Y - 9).toFixed(2)}" width="${IN_W.toFixed(2)}" height="10"
+                  fill="none" stroke="rgba(0,0,0,0.18)" stroke-width="1"></rect>
+          </g>
+        `;
+
+        return { defs, markup };
+      };
+
+      const w1 = buildOne(OPEN_X_1, isOpen1, frameFill1, frameAccent1, slatTint1, pDown1, lampOn1);
+
+      const w2 = isDouble
+        ? buildOne(OPEN_X_2, isOpen2, frameFill2, frameAccent2, slatTint2, pDown2, lampOn2)
+        : null;
+
+      const svgMarkup = `
+        <svg class="sensor-svg" width="100%" height="100%" viewBox="0 0 ${VB_W} ${VB_H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Window Blind">
+          <defs>
+            ${w1.defs}
+            ${w2 ? w2.defs : ""}
+          </defs>
+          ${w1.markup}
+          ${w2 ? w2.markup : ""}
+        </svg>
+      `;
+
+      this._gdPendingMarkup = svgMarkup;
+      return html`<div class="asc-gd-dom" id="asc-gd-dom-${this._instanceId}"></div>`;
+    }
+// Targets (door 1 + optional door 2)
     const p1 = computePFromState(this._config?.entity, value);
     const e2 = isDouble ? String(this._config?.garage_door_entity2 || "").trim() : "";
     const p2 = (isDouble && e2) ? computePFromState(e2, value) : null;
@@ -5710,12 +6060,12 @@ _tumbleDryerSvg(opts) {
           slatLinesStr += `
             <path d="M ${x0.toFixed(2)} ${yy.toFixed(2)}
                      L ${x1.toFixed(2)} ${(yy + tilt).toFixed(2)}
-                     L ${x1.toFixed(2)} ${(yy + h).toFixed(2)}
-                     L ${x0.toFixed(2)} ${(yy + h - tilt).toFixed(2)} Z"
+                     L ${x1.toFixed(2)} ${(yy + slatFillH).toFixed(2)}
+                     L ${x0.toFixed(2)} ${(yy + slatFillH - tilt).toFixed(2)} Z"
                   fill="rgba(0,0,0,0.10)"></path>
             <line x1="${x0.toFixed(2)}" y1="${(yy + 1).toFixed(2)}" x2="${x1.toFixed(2)}" y2="${(yy + 1 + tilt).toFixed(2)}"
                   stroke="rgba(255,255,255,0.14)" stroke-width="1"></line>
-            <line x1="${x0.toFixed(2)}" y1="${(yy + h - 1).toFixed(2)}" x2="${x1.toFixed(2)}" y2="${(yy + h - 1 + tilt).toFixed(2)}"
+            <line x1="${x0.toFixed(2)}" y1="${(yy + slatFillH - 1).toFixed(2)}" x2="${x1.toFixed(2)}" y2="${(yy + slatFillH - 1 + tilt).toFixed(2)}"
                   stroke="rgba(0,0,0,0.14)" stroke-width="1"></line>
           `;
         }
@@ -7089,6 +7439,17 @@ _waterLevelSegmentsSvg(opts) {
       .pos-bottom_left{ bottom: var(--asc-edge-pad, 10px); left: var(--asc-edge-pad, 10px); text-align:left; }
       .pos-bottom_center{ bottom: var(--asc-edge-pad, 10px); left: 50%; transform: translateX(-50%); text-align:center; }
       .pos-bottom_right{ bottom: var(--asc-edge-pad, 10px); right: var(--asc-edge-pad, 10px); text-align:right; }
+.nameOverlay.pos-top_left{ transform: translate(var(--asc-name-off-x, 0px), var(--asc-name-off-y, 0px)); }
+      .nameOverlay.pos-top_right{ transform: translate(var(--asc-name-off-x, 0px), var(--asc-name-off-y, 0px)); }
+      .nameOverlay.pos-bottom_left{ transform: translate(var(--asc-name-off-x, 0px), var(--asc-name-off-y, 0px)); }
+      .nameOverlay.pos-bottom_right{ transform: translate(var(--asc-name-off-x, 0px), var(--asc-name-off-y, 0px)); }
+      .nameOverlay.pos-top_center{ transform: translateX(-50%) translate(var(--asc-name-off-x, 0px), var(--asc-name-off-y, 0px)); }
+      .nameOverlay.pos-bottom_center{ transform: translateX(-50%) translate(var(--asc-name-off-x, 0px), var(--asc-name-off-y, 0px)); }
+
+      /* Value offset applies to header/bottom/inside values */
+      .header .value{ transform: translate(var(--asc-value-off-x, 0px), var(--asc-value-off-y, 0px)); display:inline-block; }
+      .bottom .value{ transform: translate(var(--asc-value-off-x, 0px), var(--asc-value-off-y, 0px)); display:inline-block; }
+
 
 /* Stats overlay can use its own edge padding (tuned per symbol) */
 .statsOverlay.pos-top_left{ top: var(--asc-stats-pad, var(--asc-edge-pad, 10px)); }
@@ -7666,6 +8027,16 @@ _waterLevelSegmentsSvg(opts) {
         white-space: nowrap;
       }
 
+      .asc-badge.fixedW{
+        width: var(--asc-bdg-fixed-w, auto);
+        max-width: var(--asc-bdg-fixed-w, none);
+        justify-content: space-between;
+      }
+      .asc-badge.fixedW .bTxt{
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
 
 
 
@@ -7709,7 +8080,7 @@ _waterLevelSegmentsSvg(opts) {
         position: absolute;
         top: var(--asc-value-y, auto);
         left: 50%;
-        transform: translateX(-50%);
+        transform: translateX(calc(-50% + var(--asc-value-off-x, 0px))) translateY(var(--asc-value-off-y, 0px));
         background: transparent;
         border: none;
         padding: 0;
@@ -7733,7 +8104,7 @@ _waterLevelSegmentsSvg(opts) {
       .split-names.horizontal .split-name{
         position:absolute;
         left: 50%;
-        transform: translateX(-50%);
+        transform: translateX(calc(-50% + var(--asc-value-off-x, 0px))) translateY(var(--asc-value-off-y, 0px));
         max-width: 92%;
         text-align:center;
         white-space: nowrap;
@@ -7874,6 +8245,8 @@ const DEFAULTS = {
   fan_blade_count: 3,
   garage_door_type: "single",
   blind_style: "persienne",
+  blind_position_entity: "",
+  blind_position_entity2: "",
   image_source: "url",
   image_url: "",
   image_media: "",
@@ -8540,7 +8913,9 @@ const row2 = document.createElement("div");
     //v1.0.2
     const rowScale = document.createElement("div");
     rowScale.className = "grid2";
-    this._elCardScale = mkText("Card scale (0.2–4.0) — 1 = default", "card_scale", "number", "1");
+    this._elCardScale = mkText("Card scale (0.2–4.0) — 1 = default", "card_scale", "text", "1");
+    try { this._elCardScale.inputmode = "decimal"; } catch (_) {}
+    try { this._elCardScale.type = "text"; } catch (_) {}
     rowScale.appendChild(this._elCardScale);
     this._elSegmentGap = mkText("Gap between segments (0–40)", "segment_gap", "number", "5");
     this._elSegmentGap.step = "1";
@@ -8606,6 +8981,28 @@ const row2 = document.createElement("div");
 
     rowVP.appendChild(secTog);
     root.appendChild(rowVP);
+
+    const rowOffsets = document.createElement("div");
+    rowOffsets.className = "grid2";
+    // Use number inputs here so users get spinner arrows (up/down) and easier negative adjustments.
+    this._elNameOffsetX = mkText("Name offset X (px)", "name_offset_x", "text", "0");
+    try { this._elNameOffsetX.type = "number"; this._elNameOffsetX.step = "1"; this._elNameOffsetX.min = "-999"; this._elNameOffsetX.max = "999"; } catch (_) {}
+    this._elNameOffsetY = mkText("Name offset Y (px)", "name_offset_y", "text", "0");
+    try { this._elNameOffsetY.type = "number"; this._elNameOffsetY.step = "1"; this._elNameOffsetY.min = "-999"; this._elNameOffsetY.max = "999"; } catch (_) {}
+    rowOffsets.appendChild(this._elNameOffsetX);
+    rowOffsets.appendChild(this._elNameOffsetY);
+    root.appendChild(rowOffsets);
+
+    const rowOffsets2 = document.createElement("div");
+    rowOffsets2.className = "grid2";
+    this._elValueOffsetX = mkText("Value offset X (px)", "value_offset_x", "text", "0");
+    try { this._elValueOffsetX.type = "number"; this._elValueOffsetX.step = "1"; this._elValueOffsetX.min = "-999"; this._elValueOffsetX.max = "999"; } catch (_) {}
+    this._elValueOffsetY = mkText("Value offset Y (px)", "value_offset_y", "text", "0");
+    try { this._elValueOffsetY.type = "number"; this._elValueOffsetY.step = "1"; this._elValueOffsetY.min = "-999"; this._elValueOffsetY.max = "999"; } catch (_) {}
+    rowOffsets2.appendChild(this._elValueOffsetX);
+    rowOffsets2.appendChild(this._elValueOffsetY);
+    root.appendChild(rowOffsets2);
+
 
     const rowOpt = document.createElement("div");
     rowOpt.className = "grid2";
@@ -8674,10 +9071,41 @@ rowBlind.className = "grid1";
 this._elBlindStyle = mkSelect("Blind style", "blind_style", [
   ["persienne","Persienn"],
   ["lamella","Lamell"],
+  ["window","Window"],
 ]);
 rowBlind.appendChild(this._elBlindStyle);
 this._rowBlind = rowBlind;
 root.appendChild(rowBlind);
+
+
+
+
+// Blind position entity (only when symbol is Blind AND style is Window)
+const rowBlindPos = document.createElement("div");
+rowBlindPos.className = "grid1";
+this._elBlindPos = mkEntityControl("Blind position entity (0..100)", "blind_position_entity");
+rowBlindPos.appendChild(this._elBlindPos);
+this._rowBlindPos = rowBlindPos;
+root.appendChild(rowBlindPos);
+
+
+
+// Second blind position entity (only when Blind + Window + Double)
+const rowBlindPos2 = document.createElement("div");
+rowBlindPos2.className = "grid1";
+this._elBlindPos2 = mkEntityControl("Second blind position entity (0..100)", "blind_position_entity2");
+rowBlindPos2.appendChild(this._elBlindPos2);
+this._rowBlindPos2 = rowBlindPos2;
+root.appendChild(rowBlindPos2);
+
+    // Window lamp opacity (only when Blind + Window)
+    const rowWinLampOp = document.createElement("div");
+    rowWinLampOp.className = "grid1";
+    this._elWindowLampOpacity = mkText("Window lamp glow opacity (0..1)", "window_lamp_opacity", "number", "0.5");
+    try { this._elWindowLampOpacity.step = "0.05"; this._elWindowLampOpacity.min = "0"; this._elWindowLampOpacity.max = "1"; } catch(e) {}
+    rowWinLampOp.appendChild(this._elWindowLampOpacity);
+    this._rowWinLampOp = rowWinLampOp;
+    root.appendChild(rowWinLampOp);
 
 
 // Gate options (only when symbol is Gate)
@@ -9378,22 +9806,32 @@ if (this._rowGarage && this._elGarageType && this._elGarageWidth && this._elGara
 }
 
 if (this._rowGarageLamp && this._elGarageLamp1) {
-  this._rowGarageLamp.style.display = isGarage ? "" : "none";
+  const blindStyle = String(this._config?.blind_style || "").trim().toLowerCase();
+  const isBlindWindow = (isBlind && blindStyle === "window");
+  this._rowGarageLamp.style.display = (isGarage || isBlindWindow) ? "" : "none";
+
+  this._elGarageLamp1.label = isBlindWindow ? "First window inside lamp entity" : "First garage inside lamp entity";
   this._elGarageLamp1.hass = this._hass;
   this._elGarageLamp1.value = this._config.garage_door_lamp_entity || "";
 }
 
 if (this._rowGarage2 && this._elGarageDoor2 && this._elGarageLamp2) {
+  const blindStyle = String(this._config?.blind_style || "").trim().toLowerCase();
+  const isBlindWindow = (isBlind && blindStyle === "window");
   this._rowGarage2.style.display = isGarageDouble ? "" : "none";
   // Dynamic label (Door vs Blind)
   try {
     this._elGarageDoor2.label = isBlind ? "Second blind entity" : "Second garage door entity";
+  } catch(e) {}
+  try {
+    this._elGarageLamp2.label = isBlindWindow ? "Second window inside lamp entity" : "Second inside lamp entity";
   } catch(e) {}
   this._elGarageDoor2.hass = this._hass;
   this._elGarageDoor2.value = this._config.garage_door_entity2 || "";
   this._elGarageLamp2.hass = this._hass;
   this._elGarageLamp2.value = this._config.garage_door_lamp_entity2 || "";
 }
+
 
 // Gate options visibility
 const isGate = (baseSym === "gate");
@@ -9411,9 +9849,41 @@ if (this._rowBlind && this._elBlindStyle) {
   this._elBlindStyle.value = String(this._config.blind_style || "persienne");
 }
 
+// Blind position visibility (only for Window style)
+if (this._rowBlindPos && this._elBlindPos) {
+  const showBlind = (baseSym === "blind");
+  const bs = String(this._config.blind_style || "persienne").trim().toLowerCase();
+  this._rowBlindPos.style.display = (showBlind && bs === "window") ? "" : "none";
+  this._elBlindPos.hass = this._hass;
+  this._elBlindPos.value = String(this._config.blind_position_entity || "");
+
+
+// Second blind position entity visibility (only for Window style + Double)
+if (this._rowBlindPos2 && this._elBlindPos2) {
+  const showBlind = (baseSym === "blind");
+  const bs = String(this._config.blind_style || "persienne").trim().toLowerCase();
+  const gt = String(this._config.garage_door_type || "single").trim().toLowerCase();
+  const isDouble = (gt === "double");
+  this._rowBlindPos2.style.display = (showBlind && bs === "window" && isDouble) ? "" : "none";
+  this._elBlindPos2.hass = this._hass;
+  this._elBlindPos2.value = String(this._config.blind_position_entity2 || "");
+}
+
+
+// Window lamp opacity visibility (only for Window style)
+if (this._rowWinLampOp && this._elWindowLampOpacity) {
+  const showBlind = (baseSym === "blind");
+  const bs = String(this._config.blind_style || "persienne").trim().toLowerCase();
+  this._rowWinLampOp.style.display = (showBlind && bs === "window") ? "" : "none";
+  this._elWindowLampOpacity.value = String(this._config.window_lamp_opacity ?? 0.5);
+}
+
+}
+
+
 // Tap confirm safety visibility (Gate/Garage/Blind)
 if (this._rowTapConfirmOpen && this._swTapConfirmOpen && this._tfTapConfirmOpenWindow) {
-  const showConfirm = (baseSym === "gate" || baseSym === "garage_door" || baseSym === "blind");
+  const showConfirm = (baseSym === "gate" || baseSym === "garage_door" || (baseSym === "blind" && String(this._config.blind_style || "persienne").trim().toLowerCase() !== "window"));
   this._rowTapConfirmOpen.style.display = showConfirm ? "" : "none";
   if (this._tapConfirmHint) this._tapConfirmHint.style.display = showConfirm ? "" : "none";
 
@@ -9510,6 +9980,10 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
     if (this._elNameFont) this._elNameFont.value = String(this._config.name_font_size ?? 0);
     //v1.0.2
     this._elCardScale.value = String(this._config.card_scale ?? 1);
+    if (this._elNameOffsetX) this._elNameOffsetX.value = String(this._config.name_offset_x ?? 0);
+    if (this._elNameOffsetY) this._elNameOffsetY.value = String(this._config.name_offset_y ?? 0);
+    if (this._elValueOffsetX) this._elValueOffsetX.value = String(this._config.value_offset_x ?? 0);
+    if (this._elValueOffsetY) this._elValueOffsetY.value = String(this._config.value_offset_y ?? 0);
     //v1.0.2
 
     if (this._elCardWidth) this._elCardWidth.value = this._config.card_width || "";
@@ -10477,6 +10951,7 @@ _makeBadgeMiniPreviewEl(badge) {
       radius: 12,
       font_size: 12,
       icon_size: 18,
+      fixed_width_px: null,
       decimals: null,
       tap_action: { action: "more-info", service: "", service_data: null },
     });
@@ -11621,6 +12096,19 @@ box.appendChild(svcBox);
     tfIco.addEventListener("input", (e) => { e.stopPropagation(); this._badgeDraft.icon_size = Number(tfIco.value); this._applyBadgeDraftPreview(); updateAnimVisibility(); });
     grid3.appendChild(tfIco);
 
+    const tfFixW = document.createElement("ha-textfield");
+    tfFixW.type = "number";
+    tfFixW.label = "Fixed width (px, optional)";
+    tfFixW.step = "1";
+    tfFixW.value = (this._badgeDraft.fixed_width_px == null) ? "" : String(this._badgeDraft.fixed_width_px);
+    tfFixW.addEventListener("input", (e) => {
+      e.stopPropagation();
+      const v = parseFloat(tfFixW.value);
+      this._badgeDraft.fixed_width_px = Number.isFinite(v) && v > 0 ? Math.max(20, Math.min(400, Math.round(v))) : null;
+      this._applyBadgeDraftPreview();
+    });
+    grid3.appendChild(tfFixW);
+
     box.appendChild(grid3);
 
     const tfDec = document.createElement("ha-textfield");
@@ -12318,10 +12806,25 @@ _centerBadgePreviewNow(badgeOrObj) {
 
     let value = this._eventValue(ev, target);
 //v1.0.2
-    if (key === "min" || key === "max" || key === "value_font_size" || key === "stats_hours" || key === "card_scale") {
-    //if (key === "min" || key === "max" || key === "value_font_size" || key === "stats_hours") {
-    //v1.0.2
-      value = value === "" ? 0 : Number(value);
+    if (key === "min" || key === "max" || key === "value_font_size" || key === "name_font_size" || key === "stats_hours" || key === "card_scale" || key === "segment_gap" || key === "name_offset_x" || key === "name_offset_y" || key === "value_offset_x" || key === "value_offset_y") {
+      const raw = String(value ?? "").trim();
+
+      // Allow typing negative/decimal values without the editor forcing "0" mid-input.
+      // Home Assistant textfields may emit value-changed on each keystroke.
+      if (raw === "-" || raw === "+" || raw === "-," || raw === "-." || raw === "+," || raw === "+.") {
+        return;
+      }
+      if (/^[-+]?\d+[\.,]$/.test(raw)) {
+        // Trailing decimal separator while user is still typing
+        return;
+      }
+
+      if (raw === "") value = 0;
+      else {
+        const n = toNumberMaybe(raw);
+        value = Number.isFinite(n) ? n : Number(raw);
+        if (!Number.isFinite(value)) value = 0;
+      }
       return this._commit(key, value);
     }
     if (key === "decimals") {
