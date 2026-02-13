@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.5
+ * Andy Sensor Card v1.0.6beta
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -17,8 +17,12 @@
 */
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.5";
+const CARD_VERSION = "1.0.6beta";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
+
+const CARD_TAG = "andy-sensor-card";
+const EDITOR_TAG = "andy-sensor-card-editor";
+
 
 //console.info(CARD_TAGLINE);
 
@@ -44,10 +48,6 @@ const LitElement =
 const html = window.html || LitElement.prototype.html;
 const css = window.css || LitElement.prototype.css;
 
-
-// Card tag + editor tag (reuse everywhere)
-const CARD_TAG = "andy-sensor-card";
-const EDITOR_TAG = "andy-sensor-card-editor";
 
 // Battery-friendly default intervals (0..100)
 const DEFAULT_INTERVALS = [
@@ -800,6 +800,11 @@ scale_color_mode: "per_interval",
       const bsRaw = (this._config.blind_style == null) ? "persienne" : String(this._config.blind_style).trim().toLowerCase();
       this._config.blind_style = (bsRaw === "window") ? "window" : ((bsRaw === "lamella" || bsRaw === "lamell") ? "lamella" : "persienne");
       if (this._config.blind_position_entity == null) this._config.blind_position_entity = "";
+      if (this._config.blind_position_entity2 == null) this._config.blind_position_entity2 = "";
+      if (this._config.blind_position_mode == null) this._config.blind_position_mode = "auto";
+      if (this._config.blind_position_attribute == null) this._config.blind_position_attribute = "";
+      if (this._config.blind_position_mode2 == null) this._config.blind_position_mode2 = "auto";
+      if (this._config.blind_position_attribute2 == null) this._config.blind_position_attribute2 = "";
     }
 
 const rawSym = String(this._config.symbol || "battery_liquid");
@@ -5661,13 +5666,16 @@ const isOpen1 = _winIsOpenFromId(mainId1);
 const isOpen2 = isDouble ? _winIsOpenFromId(mainId2 || mainId1) : false;
 
 // Blind position entity drives venetian coverage (0..100, where 0 = fully up/open, 100 = fully down/closed)
-      const _winPDownFromPosId = (eid) => {
+      
+// Blind position entity drives venetian coverage (0..100, where 0 = fully up/open, 100 = fully down/closed)
+const _winPDownFromPosId = (eid, mode = "auto", attrName = "") => {
   try {
     const id = String(eid || "").trim();
     if (!id || !this.hass?.states?.[id]) return 0;
+
     const st = this.hass.states[id];
     const dom = String(id).split(".")[0] || "";
-    const cp = st?.attributes?.current_position;
+
     const clamp01 = (x) => Math.max(0, Math.min(1, x));
     const toNum = (v) => {
       if (v == null) return null;
@@ -5679,19 +5687,76 @@ const isOpen2 = isDouble ? _winIsOpenFromId(mainId2 || mainId1) : false;
       return Number.isFinite(n) ? n : null;
     };
 
-    if (cp != null) {
-      const n = toNum(cp);
-      if (n != null) {
-        const pOpen = clamp01(n / 100); // HA cover: 0=closed, 100=open
-        return (dom === "cover") ? (1 - pOpen) : pOpen;
+    const normMode = String(mode || "auto").trim().toLowerCase();
+    const pickAttr = (name) => {
+      const key = String(name || "").trim();
+      if (!key) return null;
+      return st?.attributes?.[key];
+    };
+
+    // 1) Attribute mode (explicit)
+    if (normMode === "attribute") {
+      const v = pickAttr(attrName);
+      const n = toNum(v);
+      if (n == null) return 0;
+
+      // If the source is a cover and attribute looks like "open percent", invert to "down percent".
+      // For non-cover numeric helpers/sensors, we assume 0=up, 100=down.
+      if (n >= 0 && n <= 1) return clamp01(n);
+      if (n >= 0 && n <= 100) {
+        const p = clamp01(n / 100);
+        return (dom === "cover") ? (1 - p) : p;
+      }
+      return 0;
+    }
+
+    // 2) Open/close mode (explicit)
+    if (normMode === "openclose") {
+      const s = String(st.state ?? "").trim().toLowerCase();
+      if (s === "open" || s === "opening" || s === "on" || s === "true") return 0;
+      if (s === "closed" || s === "closing" || s === "off" || s === "false") return 1;
+      return 0;
+    }
+
+    // 3) State-numeric mode (explicit)
+    const tryNumericState = () => {
+      const nState = toNum(st.state);
+      if (nState == null) return null;
+      if (nState >= 0 && nState <= 1) return clamp01(nState);
+      if (nState >= 0 && nState <= 100) return clamp01(nState / 100); // assume 0=up/open, 100=down/closed
+      return null;
+    };
+
+    if (normMode === "state") {
+      const p = tryNumericState();
+      return p == null ? 0 : p;
+    }
+
+    // AUTO mode:
+    // Prefer explicit attribute name if provided, then common cover attributes,
+    // then numeric state, then open/closed mapping.
+    const autoAttrCandidates = [];
+    const explicitAttr = String(attrName || "").trim();
+    if (explicitAttr) autoAttrCandidates.push(explicitAttr);
+    autoAttrCandidates.push("current_position", "position", "current_level", "level", "percentage", "percent", "value");
+
+    for (const k of autoAttrCandidates) {
+      const v = pickAttr(k);
+      if (v == null) continue;
+      const n = toNum(v);
+      if (n == null) continue;
+      if (n >= 0 && n <= 1) return clamp01(n);
+      if (n >= 0 && n <= 100) {
+        const p = clamp01(n / 100);
+        // If it's a cover (or the attribute is the standard current_position/position),
+        // treat it as "open percent" and invert to "down percent".
+        const invert = (dom === "cover") || k === "current_position" || k === "position";
+        return invert ? (1 - p) : p;
       }
     }
 
-    const nState = toNum(st.state);
-    if (nState != null) {
-      if (nState >= 0 && nState <= 1) return clamp01(nState);
-      if (nState >= 0 && nState <= 100) return clamp01(nState / 100); // assume 0=up/open, 100=down/closed
-    }
+    const pNum = tryNumericState();
+    if (pNum != null) return pNum;
 
     const s = String(st.state ?? "").trim().toLowerCase();
     if (s === "open" || s === "opening" || s === "on" || s === "true") return 0;
@@ -5703,8 +5768,14 @@ const isOpen2 = isDouble ? _winIsOpenFromId(mainId2 || mainId1) : false;
 const posId1 = String(this._config?.blind_position_entity || "").trim();
 const posId2 = String(this._config?.blind_position_entity2 || "").trim();
 
-const pDown1 = _winPDownFromPosId(posId1);
-const pDown2 = isDouble ? _winPDownFromPosId(posId2 || posId1) : 0;
+const posMode1 = String(this._config?.blind_position_mode || "auto").trim().toLowerCase();
+const posAttr1 = String(this._config?.blind_position_attribute || "").trim();
+
+const posMode2 = String(this._config?.blind_position_mode2 || posMode1).trim().toLowerCase();
+const posAttr2 = String(this._config?.blind_position_attribute2 || posAttr1).trim();
+
+const pDown1 = _winPDownFromPosId(posId1, posMode1, posAttr1);
+const pDown2 = isDouble ? _winPDownFromPosId((posId2 || posId1), posMode2, posAttr2) : 0;
 
 const posPct1 = Math.round(pDown1 * 100);
 const posPct2 = Math.round(pDown2 * 100);
@@ -8247,6 +8318,10 @@ const DEFAULTS = {
   blind_style: "persienne",
   blind_position_entity: "",
   blind_position_entity2: "",
+  blind_position_mode: "auto",
+  blind_position_attribute: "",
+  blind_position_mode2: "auto",
+  blind_position_attribute2: "",
   image_source: "url",
   image_url: "",
   image_media: "",
@@ -9083,21 +9158,64 @@ root.appendChild(rowBlind);
 // Blind position entity (only when symbol is Blind AND style is Window)
 const rowBlindPos = document.createElement("div");
 rowBlindPos.className = "grid1";
-this._elBlindPos = mkEntityControl("Blind position entity (0..100)", "blind_position_entity");
+this._elBlindPos = mkEntityControl("First window blind position entity (Used to animate blind)", "blind_position_entity");
 rowBlindPos.appendChild(this._elBlindPos);
 this._rowBlindPos = rowBlindPos;
 root.appendChild(rowBlindPos);
+
+// Blind position source + attribute (only when Blind + Window)
+const rowBlindPosSrc = document.createElement("div");
+rowBlindPosSrc.className = "grid2";
+this._elBlindPosMode = mkSelect("Blind position source", "blind_position_mode", [
+  ["auto", "Auto detect (recommended)"],
+  ["attribute", "Use attribute"],
+  ["state", "Use numeric state"],
+  ["openclose", "Use open/closed"]
+]);
+this._elBlindPosAttr = mkText("Blind position attribute (optional)", "blind_position_attribute", "text", "current_position");
+rowBlindPosSrc.appendChild(this._elBlindPosMode);
+rowBlindPosSrc.appendChild(this._elBlindPosAttr);
+this._rowBlindPosSrc = rowBlindPosSrc;
+root.appendChild(rowBlindPosSrc);
+
+// Hint for users: cover entities expose position as % open (100=open), while this window blind
+// expects % down (100=fully down). We auto-invert cover-like positions.
+const blindPosHint = document.createElement("div");
+blindPosHint.className = "hint";
+blindPosHint.innerText = "Tip: For cover/blind entities, Home Assistant position is % OPEN (100=open, 0=closed). This card automatically inverts that to % DOWN for the window blind (100=down). If you use an input_number/sensor, use 0=up and 100=down.";
+root.appendChild(blindPosHint);
 
 
 
 // Second blind position entity (only when Blind + Window + Double)
 const rowBlindPos2 = document.createElement("div");
 rowBlindPos2.className = "grid1";
-this._elBlindPos2 = mkEntityControl("Second blind position entity (0..100)", "blind_position_entity2");
+this._elBlindPos2 = mkEntityControl("Second window blind position entity (Used to animate blind)", "blind_position_entity2");
 rowBlindPos2.appendChild(this._elBlindPos2);
 this._rowBlindPos2 = rowBlindPos2;
 root.appendChild(rowBlindPos2);
 
+// Second blind position source + attribute (only when Blind + Window + Double)
+const rowBlindPosSrc2 = document.createElement("div");
+rowBlindPosSrc2.className = "grid2";
+this._elBlindPosMode2 = mkSelect("Second blind position source", "blind_position_mode2", [
+  ["auto", "Auto detect (recommended)"],
+  ["attribute", "Use attribute"],
+  ["state", "Use numeric state"],
+  ["openclose", "Use open/closed"]
+]);
+this._elBlindPosAttr2 = mkText("Second blind position attribute (optional)", "blind_position_attribute2", "text", "current_position");
+rowBlindPosSrc2.appendChild(this._elBlindPosMode2);
+rowBlindPosSrc2.appendChild(this._elBlindPosAttr2);
+this._rowBlindPosSrc2 = rowBlindPosSrc2;
+root.appendChild(rowBlindPosSrc2);
+
+const blindPosHint2 = document.createElement("div");
+blindPosHint2.className = "hint";
+blindPosHint2.innerText = "Tip: Same rule for the second window: cover position is % OPEN (100=open). The card inverts it to % DOWN. For numeric helpers, use 0=up and 100=down.";
+root.appendChild(blindPosHint2);
+
+	
     // Window lamp opacity (only when Blind + Window)
     const rowWinLampOp = document.createElement("div");
     rowWinLampOp.className = "grid1";
@@ -9821,7 +9939,7 @@ if (this._rowGarage2 && this._elGarageDoor2 && this._elGarageLamp2) {
   this._rowGarage2.style.display = isGarageDouble ? "" : "none";
   // Dynamic label (Door vs Blind)
   try {
-    this._elGarageDoor2.label = isBlind ? "Second blind entity" : "Second garage door entity";
+    this._elGarageDoor2.label = isBlind ? "Second window entity" : "Second garage door entity";
   } catch(e) {}
   try {
     this._elGarageLamp2.label = isBlindWindow ? "Second window inside lamp entity" : "Second inside lamp entity";
@@ -9857,6 +9975,19 @@ if (this._rowBlindPos && this._elBlindPos) {
   this._elBlindPos.hass = this._hass;
   this._elBlindPos.value = String(this._config.blind_position_entity || "");
 
+  // Blind position source/attribute visibility (only for Window style)
+  if (this._rowBlindPosSrc && this._elBlindPosMode && this._elBlindPosAttr) {
+    const showBlind = (baseSym === "blind");
+    const bs = String(this._config.blind_style || "persienne").trim().toLowerCase();
+    const show = (showBlind && bs === "window");
+    this._rowBlindPosSrc.style.display = show ? "" : "none";
+    this._elBlindPosMode.value = String(this._config.blind_position_mode || "auto");
+    this._elBlindPosAttr.value = String(this._config.blind_position_attribute || "");
+    const m = String(this._config.blind_position_mode || "auto").trim().toLowerCase();
+    // Only show attribute field when attribute mode is selected
+    this._elBlindPosAttr.style.display = (m === "attribute") ? "" : "none";
+  }
+
 
 // Second blind position entity visibility (only for Window style + Double)
 if (this._rowBlindPos2 && this._elBlindPos2) {
@@ -9867,6 +9998,20 @@ if (this._rowBlindPos2 && this._elBlindPos2) {
   this._rowBlindPos2.style.display = (showBlind && bs === "window" && isDouble) ? "" : "none";
   this._elBlindPos2.hass = this._hass;
   this._elBlindPos2.value = String(this._config.blind_position_entity2 || "");
+
+  // Second blind position source/attribute visibility (only for Window style + Double)
+  if (this._rowBlindPosSrc2 && this._elBlindPosMode2 && this._elBlindPosAttr2) {
+    const showBlind = (baseSym === "blind");
+    const bs = String(this._config.blind_style || "persienne").trim().toLowerCase();
+    const gt = String(this._config.garage_door_type || "single").trim().toLowerCase();
+    const isDouble = (gt === "double");
+    const show = (showBlind && bs === "window" && isDouble);
+    this._rowBlindPosSrc2.style.display = show ? "" : "none";
+    this._elBlindPosMode2.value = String(this._config.blind_position_mode2 || this._config.blind_position_mode || "auto");
+    this._elBlindPosAttr2.value = String(this._config.blind_position_attribute2 || this._config.blind_position_attribute || "");
+    const m = String(this._config.blind_position_mode2 || this._config.blind_position_mode || "auto").trim().toLowerCase();
+    this._elBlindPosAttr2.style.display = (m === "attribute") ? "" : "none";
+  }
 }
 
 
