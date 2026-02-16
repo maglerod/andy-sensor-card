@@ -41,17 +41,11 @@ console.info(
 );
 
 
-
-
 const LitElement =
   window.LitElement || Object.getPrototypeOf(customElements.get("ha-panel-lovelace"));
 const html = window.html || LitElement.prototype.html;
 const css = window.css || LitElement.prototype.css;
 
-
-// Card tag + editor tag (reuse everywhere)
-const CARD_TAG = "andy-sensor-card-development";
-const EDITOR_TAG = "andy-sensor-card-editor-development";
 
 // Battery-friendly default intervals (0..100)
 const DEFAULT_INTERVALS = [
