@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.6beta
+ * Andy Sensor Card v1.0.6.1beta
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -17,7 +17,7 @@
 */
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.6beta";
+const CARD_VERSION = "1.0.6.1beta";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
 
 const CARD_TAG = "andy-sensor-card";
@@ -48,6 +48,10 @@ const LitElement =
 const html = window.html || LitElement.prototype.html;
 const css = window.css || LitElement.prototype.css;
 
+
+// Card tag + editor tag (reuse everywhere)
+const CARD_TAG = "andy-sensor-card-development";
+const EDITOR_TAG = "andy-sensor-card-editor-development";
 
 // Battery-friendly default intervals (0..100)
 const DEFAULT_INTERVALS = [
@@ -711,6 +715,10 @@ this._gateAnimRaf = 0;
       garage_door_entity2: "", // Garage door only: Door 2 position entity (optional)
       garage_door_lamp_entity: "", // Garage door only: Lamp entity for door 1 (optional)
       garage_door_lamp_entity2: "", // Garage door only: Lamp entity for door 2 (optional)
+
+      // Window symbol (new): open/closed window sash state (e.g., binary_sensor)
+      window_state_entity: "",
+      window_state_entity2: "",
       window_lamp_opacity: 0.5, // Window (Blind style "window") lamp glow opacity (0..1 or 0..100)
       // Image only
       image_source: "url", // Image only: url | media
@@ -779,6 +787,8 @@ scale_color_mode: "per_interval",
       if (typeof this._config.garage_door_entity2 !== "string") this._config.garage_door_entity2 = "";
       if (typeof this._config.garage_door_lamp_entity !== "string") this._config.garage_door_lamp_entity = "";
       if (typeof this._config.garage_door_lamp_entity2 !== "string") this._config.garage_door_lamp_entity2 = "";
+      if (typeof this._config.window_state_entity !== "string") this._config.window_state_entity = "";
+      if (typeof this._config.window_state_entity2 !== "string") this._config.window_state_entity2 = "";
     }
 
     
@@ -800,11 +810,6 @@ scale_color_mode: "per_interval",
       const bsRaw = (this._config.blind_style == null) ? "persienne" : String(this._config.blind_style).trim().toLowerCase();
       this._config.blind_style = (bsRaw === "window") ? "window" : ((bsRaw === "lamella" || bsRaw === "lamell") ? "lamella" : "persienne");
       if (this._config.blind_position_entity == null) this._config.blind_position_entity = "";
-      if (this._config.blind_position_entity2 == null) this._config.blind_position_entity2 = "";
-      if (this._config.blind_position_mode == null) this._config.blind_position_mode = "auto";
-      if (this._config.blind_position_attribute == null) this._config.blind_position_attribute = "";
-      if (this._config.blind_position_mode2 == null) this._config.blind_position_mode2 = "auto";
-      if (this._config.blind_position_attribute2 == null) this._config.blind_position_attribute2 = "";
     }
 
 const rawSym = String(this._config.symbol || "battery_liquid");
@@ -830,6 +835,7 @@ const rawSym = String(this._config.symbol || "battery_liquid");
       "heatpump",
       "garage_door",
       "blind",
+      "window",
       "gate",
       "image",
       "gas_cylinder",
@@ -842,7 +848,7 @@ const rawSym = String(this._config.symbol || "battery_liquid");
 
     // Default scale range for binary position symbols (Gate / Garage door / Blind)
     // If the user didn't explicitly set min/max, use 0..1 instead of 0..100.
-    if ((sym === "gate" || sym === "garage_door" || sym === "blind")) {
+    if ((sym === "gate" || sym === "garage_door" || sym === "blind" || sym === "window")) {
       if (!("min" in cfg)) this._config.min = 0;
       if (!("max" in cfg)) this._config.max = 1;
     }
@@ -1238,7 +1244,7 @@ updated(changedProps) {
     try { this._badgeSymbolStop(); } catch (_) {}
   }
 
-  if (sym === "garage_door" || sym === "blind") {
+  if (sym === "garage_door" || sym === "blind" || sym === "window") {
     this._garageSyncDom();
   } else {
     try { this._garageStopAnimation(); } catch (_) {}
@@ -1264,6 +1270,18 @@ updated(changedProps) {
         this._ascPrevScrollEl.removeEventListener("scroll", this._ascPrevScrollOnScroll);
       }
     } catch (_) {}
+
+    // If a badge drag is active and the card is removed, make sure we detach global listeners
+    try {
+      const st = this._bdgDrag;
+      if (st && st._onMove && st._onEnd) {
+        window.removeEventListener("pointermove", st._onMove);
+        window.removeEventListener("pointerup", st._onEnd);
+        window.removeEventListener("pointercancel", st._onEnd);
+      }
+      this._bdgDrag = null;
+    } catch (_) {}
+
     this._ascPrevScrollEl = null;
     super.disconnectedCallback();
   }
@@ -1306,7 +1324,7 @@ _fanSyncAnimation() {
 // ---------------------------
 _garageSyncDom() {
   const sym = String(this._config?.symbol || "battery_liquid");
-  if (sym !== "garage_door" && sym !== "blind") {
+  if (sym !== "garage_door" && sym !== "blind" && sym !== "window") {
     this._garageStopAnimation();
     this._gdPendingMarkup = "";
     this._gdLastMarkup = "";
@@ -1347,7 +1365,7 @@ _garageBindDoor2Tap(host) {
 
     host.addEventListener("click", (ev) => {
       const sym = String(this._config?.symbol || "battery_liquid");
-      if (sym !== "garage_door" && sym !== "blind") return;
+      if (sym !== "garage_door" && sym !== "blind" && sym !== "window") return;
 
       const type = String(this._config?.garage_door_type || "single");
       if (type !== "double") return;
@@ -1626,8 +1644,19 @@ _garageComputeTargetP(entityIdOverride) {
     }
 
     const range = (maxS - minS) || 1;
-    const p = (raw != null && Number.isFinite(Number(raw))) ? clamp01((Number(raw) - minS) / range) : 0;
-    return p;
+    let p = (raw != null && Number.isFinite(Number(raw))) ? clamp01((Number(raw) - minS) / range) : 0;
+
+    // Window symbol: main entity drives blind coverage. For cover entities, HA uses current_position as "open %" (0=closed, 100=open).
+    // Convert to "down coverage" so 0 = fully up/open, 1 = fully down/closed.
+    try {
+      const sym = String(this._config?.symbol || "").trim().toLowerCase();
+      if (sym === "window") {
+        const dom = String(entityId).split(".")[0] || "";
+        if (dom === "cover") p = 1 - p;
+      }
+    } catch (_) {}
+
+    return clamp01(p);
   } catch (_) {
     return 0;
   }
@@ -1878,7 +1907,7 @@ _garageAnimateToTargets(targetP1, targetP2) {
 
 _garageSyncAnimation() {
   const sym = String(this._config?.symbol || 'battery_liquid');
-  if (sym !== 'garage_door' && sym !== 'blind') {
+  if (sym !== 'garage_door' && sym !== 'blind' && sym !== 'window') {
     this._garageStopAnimation();
     return;
   }
@@ -1914,7 +1943,7 @@ _startPredictiveMotion(sym) {
   try {
     const s = String(sym || "").trim().toLowerCase();
     if (s === "gate") return this._gatePredictiveStart();
-    if (s === "garage_door" || s === "blind") return this._garagePredictiveStart();
+    if (s === "garage_door" || s === "blind" || s === "window") return this._garagePredictiveStart();
   } catch (_) {}
 }
 
@@ -2486,7 +2515,7 @@ _onBadgeSliderChange(ev, badge) {
   _renderTapConfirmLock() {
     try {
       const sym = String(this._config?.symbol || "").trim().toLowerCase();
-      if (!(sym === "gate" || sym === "garage_door" || (sym === "blind" && String(this._config?.blind_style || "persienne").trim().toLowerCase() !== "window"))) return html``;
+      if (!(sym === "gate" || sym === "garage_door" || sym === "window" || (sym === "blind" && String(this._config?.blind_style || "persienne").trim().toLowerCase() !== "window"))) return html``;
       if (!this._config?.tap_confirm_open) return html``;
 
       const p = this._tapConfirmOpen;
@@ -2514,7 +2543,7 @@ _onBadgeSliderChange(ev, badge) {
     try {
       const sym = String(this._config?.symbol || "").trim().toLowerCase();
       const confirmOn = !!this._config?.tap_confirm_open;
-      if (confirmOn && (sym === "gate" || sym === "garage_door" || (sym === "blind" && String(this._config?.blind_style || "persienne").trim().toLowerCase() !== "window")) && (act === "toggle" || act === "call-service")) {
+      if (confirmOn && (sym === "gate" || sym === "garage_door" || sym === "window" || (sym === "blind" && String(this._config?.blind_style || "persienne").trim().toLowerCase() !== "window")) && (act === "toggle" || act === "call-service")) {
         const st = this.hass?.states?.[entityId];
         const raw = st?.state;
         if (this._isClosedLikeState(raw)) {
@@ -2542,7 +2571,7 @@ _onBadgeSliderChange(ev, badge) {
     try {
       const sym = String(this._config?.symbol || "").trim().toLowerCase();
       const predictiveOn = (this._config?.tap_starts_animation == null) ? true : !!this._config.tap_starts_animation;
-      if (predictiveOn && (act === "toggle" || act === "call-service") && (sym === "gate" || sym === "garage_door" || sym === "blind")) {
+      if (predictiveOn && (act === "toggle" || act === "call-service") && (sym === "gate" || sym === "garage_door" || sym === "blind" || sym === "window")) {
         this._startPredictiveMotion(sym);
       }
     } catch (_) {}
@@ -3719,6 +3748,7 @@ const root = this.renderRoot;
     if (sym === "tumble_dryer") return this._tumbleDryerSvg(o); //v1.0.6
     if (sym === "garage_door") return this._garageDoorSvg(o); //v1.6.15
     if (sym === "blind") return this._blindSvg(o); //v1.6.26
+    if (sym === "window") return this._windowSvg(o); //v1.6.XX
     if (sym === "gate") return this._gateSvg(o); //v1.6.30
     if (sym === "image") return this._imageSvg(o); //v1.6.38
     if (sym === "gas_cylinder") return this._gasCylinderLiquidSvg(o); //v1.0.2
@@ -4459,6 +4489,364 @@ const root = this.renderRoot;
 // ---------------------------
 // Symbol: gate (sliding / hinged door)
 // ---------------------------
+
+  // --- Window symbol (new): copies Blind style "Window" rendering, but uses main entity for blind position ---
+  _windowSvg(opts) {
+    const { value } = opts;
+
+    let minS = Number(this._config.min ?? 0);
+    let maxS = Number(this._config.max ?? 100);
+    if (!Number.isFinite(minS)) minS = 0;
+    if (!Number.isFinite(maxS)) maxS = 100;
+    if (maxS < minS) [minS, maxS] = [maxS, minS];
+
+    const range = (maxS - minS) || 1;
+
+    // Reuse the same config fields as garage door (type/width/gap/entities/lamps)
+    const type = String(this._config.garage_door_type || "single");
+    const isDouble = (type === "double");
+
+    let doorW = Number(this._config.garage_door_width ?? 200);
+    if (!Number.isFinite(doorW)) doorW = 200;
+    doorW = Math.max(120, Math.min(360, doorW));
+
+    let gap = Number(this._config.garage_door_gap ?? 16);
+    if (!Number.isFinite(gap)) gap = 16;
+    gap = Math.max(0, Math.min(220, gap));
+
+    const MARGIN = 10;
+
+    const VB_W = isDouble ? (doorW * 2 + gap + MARGIN * 2) : (doorW + MARGIN * 2);
+    const VB_H = 230;
+
+    const OPEN_Y = 26;
+    const OPEN_H = 196;
+
+    const OPEN_X_1 = MARGIN;
+    const OPEN_X_2 = MARGIN + doorW + gap;
+
+    const OPEN_W = doorW;
+
+    const TRIM = 5.2; // a bit more "window frame"
+    const IN_Y = OPEN_Y + TRIM;
+    const IN_H = OPEN_H - TRIM * 2;
+    const uidBase = `${this._instanceId}_win`;
+
+    const normalizeFillColor = (c, fallback = "#d9d9d9") => {
+      const t = (c == null) ? "" : String(c).trim();
+      if (!t) return fallback;
+      if (isHexColor(t)) return t;
+      if (/^rgba?\(/i.test(t)) return t;
+      if (/^hsla?\(/i.test(t)) return t;
+      return fallback;
+    };
+
+    // Window open/closed state comes from window_state_entity (e.g. binary_sensor)
+    const _winIsOpenFromId = (eid) => {
+      const id = String(eid || "").trim();
+      if (!id) return false;
+      const st = this.hass?.states?.[id];
+      const s = (st?.state == null) ? "" : String(st.state).trim().toLowerCase();
+      return (s === "open" || s === "opening" || s === "on" || s === "true" || s === "tilted" || s === "ventilation");
+    };
+
+    // Main entity drives venetian blind position (0..100 or 0..1 or text mapped)
+    // pDown = 0 => fully up/open, pDown = 1 => fully down/closed.
+    const _winPDownFromMainId = (eid, fallbackRaw) => {
+      try {
+        const id = String(eid || "").trim();
+        if (!id || !this.hass?.states?.[id]) {
+          // fallback to incoming raw "value" for old numeric sensors
+          const raw = toNumberMaybe(fallbackRaw);
+          if (raw != null && Number.isFinite(Number(raw))) return clamp01((Number(raw) - minS) / range);
+          return 0;
+        }
+
+        const st = this.hass.states[id];
+        const dom = String(id).split(".")[0] || "";
+
+        const toNum = (v) => {
+          if (v == null) return null;
+          const s0 = String(v).trim();
+          if (!s0) return null;
+          const m = s0.match(/-?\d+(?:[\.,]\d+)?/);
+          const s = m ? m[0] : s0;
+          const n = Number(String(s).replace(",", "."));
+          return Number.isFinite(n) ? n : null;
+        };
+
+        const cp = st?.attributes?.current_position;
+        if (cp != null) {
+          const n = toNum(cp);
+          if (n != null) {
+            const pOpen = clamp01(n / 100); // HA cover: 0=closed, 100=open
+            return (dom === "cover") ? (1 - pOpen) : pOpen;
+          }
+        }
+
+        const nState = toNum(st.state);
+        if (nState != null) {
+          if (nState >= 0 && nState <= 1) return clamp01(nState);
+          if (nState >= 0 && nState <= 100) return clamp01(nState / 100); // assume 0=up/open, 100=down/closed
+        }
+
+        const s = String(st.state ?? "").trim().toLowerCase();
+        if (s === "open" || s === "opening" || s === "on" || s === "true") return 0;
+        if (s === "closed" || s === "closing" || s === "off" || s === "false") return 1;
+      } catch (_) {}
+      return 0;
+    };
+
+    const mainId1 = String(this._config?.entity || "").trim();
+    const mainId2 = String(this._config?.garage_door_entity2 || "").trim();
+
+    const pDown1 = _winPDownFromMainId(mainId1, value);
+    const pDown2 = isDouble ? _winPDownFromMainId(mainId2 || mainId1, value) : 0;
+
+    const posPct1 = Math.round(pDown1 * 100);
+    const posPct2 = Math.round(pDown2 * 100);
+
+    const winStateId1 = String(this._config?.window_state_entity || "").trim() || mainId1;
+    const winStateId2 = String(this._config?.window_state_entity2 || "").trim() || mainId2 || winStateId1;
+
+    const isOpen1 = _winIsOpenFromId(winStateId1);
+    const isOpen2 = isDouble ? _winIsOpenFromId(winStateId2) : false;
+
+    // Lamp glow behind glass (optional) — keep existing garage lamp entities
+    const lamp1Id = String(this._config?.garage_door_lamp_entity || "").trim()
+      || String(this._config?.entity2 || "").trim(); // legacy fallback
+    const lamp2Id = String(this._config?.garage_door_lamp_entity2 || "").trim();
+    const lampOn1 = this._isOnLikeState(lamp1Id);
+    const lampOn2 = isDouble ? this._isOnLikeState(lamp2Id || lamp1Id) : false;
+
+    // User-controlled window lamp glow opacity
+    let _wLampOp = Number(this._config?.window_lamp_opacity);
+    if (!Number.isFinite(_wLampOp)) _wLampOp = 0.5;
+    if (_wLampOp > 1.0001) _wLampOp = _wLampOp / 100; // allow 0..100
+    const windowLampOpacity = clamp01(_wLampOp);
+
+    const intervals = Array.isArray(this._config?.intervals) ? this._config.intervals : [];
+
+    // Frame colors: driven by WindowState entity (static match: open/closed), fallback to neutral.
+    const rawWS1 = winStateId1 ? (this.hass?.states?.[winStateId1]?.state) : null;
+    const rawWS2 = winStateId2 ? (this.hass?.states?.[winStateId2]?.state) : rawWS1;
+
+    const itFrame1 = normalizeInterval(this._findIntervalForStateOrValue(null, (rawWS1 == null ? null : String(rawWS1).trim()), intervals));
+    const itFrame2 = isDouble ? normalizeInterval(this._findIntervalForStateOrValue(null, (rawWS2 == null ? null : String(rawWS2).trim()), intervals)) : itFrame1;
+
+    const frameFill1 = normalizeFillColor(itFrame1.color || itFrame1.fill, "rgba(245,245,245,1)");
+    const frameAccent1 = normalizeFillColor(itFrame1.outline || itFrame1.color, "rgba(0,0,0,0.26)");
+    const frameFill2 = normalizeFillColor((itFrame2?.color || itFrame2?.fill), frameFill1);
+    const frameAccent2 = normalizeFillColor((itFrame2?.outline || itFrame2?.color), frameAccent1);
+
+    // Blind slat tint: driven by main entity value (posPct), so intervals control COLOR + SECONDS (animation).
+    const itPos1 = normalizeInterval(this._findIntervalForStateOrValue(posPct1, null, intervals));
+    const slatTint1 = normalizeFillColor(itPos1.color, "#d8d8d8");
+
+    const itPos2 = isDouble
+      ? normalizeInterval(this._findIntervalForStateOrValue(posPct2, null, intervals))
+      : itPos1;
+    const slatTint2 = normalizeFillColor(itPos2.color, "#d8d8d8");
+
+    const buildOne = (idx, openX, openFlag, frameFill, frameAccent, slatTint, pDown, lampOn) => {
+      const IN_X = openX + TRIM;
+      const IN_W = OPEN_W - TRIM * 2;
+
+      // Split into two panes
+      const midX = IN_X + IN_W / 2;
+      const panePad = 1.6;
+      const paneW = (IN_W / 2) - panePad;
+
+      // Glass rects
+      const gY = IN_Y + 2.0;
+      const gH = IN_H - 4.0;
+
+      const leftX = IN_X + panePad;
+      const rightX = midX + panePad * 0.5;
+
+      // Blind coverage (from top down)
+      const coverH = Math.max(0, Math.min(IN_H, pDown * IN_H));
+
+      const clipId = `ascWinClip_${uidBase}_${openX}`;
+      const glassGradId = `ascWinGlass_${uidBase}_${openX}`;
+      const glassHiId = `ascWinGlassHi_${uidBase}_${openX}`;
+      const glowGradId = `ascWinGlow_${uidBase}_${openX}`;
+      const glowRadId = `ascWinGlowRad_${uidBase}_${openX}`;
+
+      const defs = `
+        <clipPath id="${clipId}">
+          <rect x="${IN_X.toFixed(2)}" y="${IN_Y.toFixed(2)}" width="${IN_W.toFixed(2)}" height="${coverH.toFixed(2)}"></rect>
+        </clipPath>
+        <linearGradient id="${glassGradId}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="rgba(200,232,255,0.12)"></stop>
+          <stop offset="0.55" stop-color="rgba(170,215,250,0.06)"></stop>
+          <stop offset="1" stop-color="rgba(120,190,240,0.10)"></stop>
+        </linearGradient>
+        <radialGradient id="${glassHiId}" cx="35%" cy="20%" r="70%">
+          <stop offset="0" stop-color="rgba(255,255,255,0.14)"></stop>
+          <stop offset="0.45" stop-color="rgba(255,255,255,0.05)"></stop>
+          <stop offset="1" stop-color="rgba(255,255,255,0)"></stop>
+        </radialGradient>
+        <linearGradient id="${glowGradId}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="rgba(255,238,200,0.18)"></stop>
+          <stop offset="0.40" stop-color="rgba(255,214,137,0.10)"></stop>
+          <stop offset="1" stop-color="rgba(255,214,137,0)"></stop>
+        </linearGradient>
+        <radialGradient id="${glowRadId}" cx="50%" cy="10%" r="70%">
+          <stop offset="0" stop-color="rgba(255,244,210,0.16)"></stop>
+          <stop offset="0.55" stop-color="rgba(255,214,137,0.10)"></stop>
+          <stop offset="1" stop-color="rgba(255,214,137,0)"></stop>
+        </radialGradient>
+      `;
+
+      const glowOpacity = lampOn ? windowLampOpacity : 0;
+      const glow = `
+        <g opacity="${glowOpacity}">
+          <rect x="${IN_X.toFixed(2)}" y="${IN_Y.toFixed(2)}" width="${IN_W.toFixed(2)}" height="${IN_H.toFixed(2)}" fill="url(#${glowGradId})"></rect>
+          <rect x="${IN_X.toFixed(2)}" y="${IN_Y.toFixed(2)}" width="${IN_W.toFixed(2)}" height="${IN_H.toFixed(2)}" fill="url(#${glowRadId})"></rect>
+        </g>
+      `;
+
+      // Venetian slats (only drawn inside cover clip; gaps are transparent so glow can be seen)
+      const slatH = 7.0;
+      const count = Math.max(10, Math.floor(IN_H / slatH));
+      const x0 = IN_X + 3;
+      const x1 = IN_X + IN_W - 3;
+
+      let slats = "";
+      for (let i = 0; i < count; i++) {
+        const yy = IN_Y + i * (IN_H / count);
+        const h = (IN_H / count);
+        const gap = Math.max(1.6, h * 0.28);
+        const slatFillH = Math.max(2.8, h - gap);
+        const tilt = 1.15;
+        slats += `
+          <path d="M ${x0.toFixed(2)} ${yy.toFixed(2)}
+                   L ${x1.toFixed(2)} ${(yy + tilt).toFixed(2)}
+                   L ${x1.toFixed(2)} ${(yy + slatFillH).toFixed(2)}
+                   L ${x0.toFixed(2)} ${(yy + slatFillH - tilt).toFixed(2)} Z"
+                fill="${slatTint}" opacity="0.38"></path>
+          <line x1="${x0.toFixed(2)}" y1="${(yy + 1).toFixed(2)}" x2="${x1.toFixed(2)}" y2="${(yy + 1 + tilt).toFixed(2)}"
+                stroke="rgba(255,255,255,0.18)" stroke-width="1"></line>
+          <line x1="${x0.toFixed(2)}" y1="${(yy + slatFillH - 1).toFixed(2)}" x2="${x1.toFixed(2)}" y2="${(yy + slatFillH - 1 + tilt).toFixed(2)}"
+                stroke="rgba(0,0,0,0.16)" stroke-width="1"></line>
+        `;
+      }
+
+      // Open sash illusion (front view) — left pane opens "toward you"
+      const sashClosed = `
+        <rect x="${leftX.toFixed(2)}" y="${gY.toFixed(2)}" width="${paneW.toFixed(2)}" height="${gH.toFixed(2)}"
+              fill="rgba(0,0,0,0)" stroke="rgba(0,0,0,0.24)" stroke-width="2"></rect>
+      `;
+
+      const sashOpen = `
+        <polygon points="
+          ${(leftX - 2).toFixed(2)},${(gY + 2).toFixed(2)}
+          ${(leftX + paneW - 10).toFixed(2)},${(gY + 10).toFixed(2)}
+          ${(leftX + paneW - 10).toFixed(2)},${(gY + gH - 10).toFixed(2)}
+          ${(leftX - 2).toFixed(2)},${(gY + gH - 2).toFixed(2)}"
+          fill="rgba(255,255,255,0.06)" stroke="rgba(0,0,0,0.24)" stroke-width="2"></polygon>
+        <polygon points="
+          ${(leftX + paneW - 10).toFixed(2)},${(gY + 10).toFixed(2)}
+          ${(leftX + paneW + 2).toFixed(2)},${(gY + 4).toFixed(2)}
+          ${(leftX + paneW + 2).toFixed(2)},${(gY + gH - 4).toFixed(2)}
+          ${(leftX + paneW - 10).toFixed(2)},${(gY + gH - 10).toFixed(2)}"
+          fill="rgba(0,0,0,0.10)"></polygon>
+      `;
+
+      const markup = `
+        <g>
+          <!-- Outer frame (bars only so glass is never tinted by frame fill) -->
+          <rect x="${openX}" y="${OPEN_Y}" width="${OPEN_W}" height="${OPEN_H}"
+                fill="none" stroke="${frameAccent}" stroke-width="2.2"></rect>
+
+          <!-- Frame bars -->
+          <rect x="${openX}" y="${OPEN_Y}" width="${OPEN_W}" height="12"
+                fill="${frameFill}" stroke="rgba(0,0,0,0.18)" stroke-width="1.2"></rect>
+          <rect x="${openX}" y="${(OPEN_Y + 12).toFixed(2)}" width="12" height="${(OPEN_H - 12).toFixed(2)}"
+                fill="${frameFill}" stroke="rgba(0,0,0,0.18)" stroke-width="1.2"></rect>
+          <rect x="${(openX + OPEN_W - 12).toFixed(2)}" y="${(OPEN_Y + 12).toFixed(2)}" width="12" height="${(OPEN_H - 12).toFixed(2)}"
+                fill="${frameFill}" stroke="rgba(0,0,0,0.18)" stroke-width="1.2"></rect>
+
+          <!-- Inner opening -->
+          <rect x="${(openX + 12).toFixed(2)}" y="${(OPEN_Y + 12).toFixed(2)}" width="${(OPEN_W - 24).toFixed(2)}" height="${(OPEN_H - 24).toFixed(2)}"
+                fill="rgba(0,0,0,0.02)" stroke="rgba(0,0,0,0.20)" stroke-width="2.0"></rect>
+
+          <!-- Sill -->
+          <rect x="${(openX + 2).toFixed(2)}" y="${(OPEN_Y + OPEN_H - 20).toFixed(2)}" width="${(OPEN_W - 4).toFixed(2)}" height="22"
+                fill="${frameFill}" opacity="0.92" stroke="rgba(0,0,0,0.18)" stroke-width="1.2"></rect>
+
+          <!-- Glass area base (neutral, not interval-tinted) -->
+          <rect x="${(openX + TRIM).toFixed(2)}" y="${IN_Y.toFixed(2)}" width="${(OPEN_W - TRIM * 2).toFixed(2)}" height="${IN_H.toFixed(2)}"
+                fill="rgba(18,28,40,0.05)"></rect>
+
+          ${glow}
+
+          <!-- Glass panes -->
+          <rect x="${leftX.toFixed(2)}" y="${gY.toFixed(2)}" width="${paneW.toFixed(2)}" height="${gH.toFixed(2)}"
+                fill="url(#${glassGradId})" opacity="0.18" stroke="rgba(0,0,0,0.12)" stroke-width="1"></rect>
+          <rect x="${rightX.toFixed(2)}" y="${gY.toFixed(2)}" width="${paneW.toFixed(2)}" height="${gH.toFixed(2)}"
+                fill="url(#${glassGradId})" opacity="0.18" stroke="rgba(0,0,0,0.12)" stroke-width="1"></rect>
+          <rect x="${leftX.toFixed(2)}" y="${gY.toFixed(2)}" width="${paneW.toFixed(2)}" height="${gH.toFixed(2)}" fill="url(#${glassHiId})"></rect>
+          <rect x="${rightX.toFixed(2)}" y="${gY.toFixed(2)}" width="${paneW.toFixed(2)}" height="${gH.toFixed(2)}" fill="url(#${glassHiId})"></rect>
+
+          <!-- Center mullion -->
+          <rect x="${(midX - 2.0).toFixed(2)}" y="${IN_Y.toFixed(2)}" width="4.0" height="${IN_H.toFixed(2)}"
+                fill="${frameFill}" opacity="0.90" stroke="rgba(0,0,0,0.14)" stroke-width="1"></rect>
+
+          <!-- Sashes -->
+          ${openFlag ? sashOpen : sashClosed}
+          <rect x="${rightX.toFixed(2)}" y="${gY.toFixed(2)}" width="${paneW.toFixed(2)}" height="${gH.toFixed(2)}"
+                fill="rgba(0,0,0,0)" stroke="rgba(0,0,0,0.24)" stroke-width="2"></rect>
+
+          <!-- Handle -->
+          <g transform="translate(${(midX - 2).toFixed(2)} ${(IN_Y + IN_H*0.49).toFixed(2)}) rotate(-12)">
+            <rect x="-2.2" y="-16" width="6.0" height="28" rx="2.2"
+                  fill="rgba(255,255,255,0.92)" stroke="rgba(0,0,0,0.25)" stroke-width="0.9"></rect>
+            <rect x="1.6" y="-10" width="9.5" height="5.2" rx="2.2"
+                  fill="rgba(255,255,255,0.92)" stroke="rgba(0,0,0,0.22)" stroke-width="0.9"></rect>
+            <circle cx="0.8" cy="-12.6" r="1.0" fill="rgba(0,0,0,0.18)"></circle>
+          </g>
+
+          <!-- Venetian blind (animated like garage/blind) -->
+          <g id="asc-gd-door-${this._instanceId}-${idx}" data-travel="${IN_H.toFixed(2)}" transform="translate(0 ${(-clamp01(1 - pDown) * IN_H).toFixed(2)})">
+            <g clip-path="url(#${clipId})">
+              ${slats}
+            </g>
+
+            <!-- Top rail -->
+            <rect x="${(openX + TRIM).toFixed(2)}" y="${(IN_Y - 9).toFixed(2)}" width="${(OPEN_W - TRIM * 2).toFixed(2)}" height="10"
+                fill="rgba(0,0,0,0.10)"></rect>
+          <rect x="${(openX + TRIM).toFixed(2)}" y="${(IN_Y - 9).toFixed(2)}" width="${(OPEN_W - TRIM * 2).toFixed(2)}" height="10"
+                fill="none" stroke="rgba(0,0,0,0.18)" stroke-width="1"></rect>
+          </g>
+        </g>
+      `;
+
+      return { defs, markup };
+    };
+
+    const w1 = buildOne(1, OPEN_X_1, isOpen1, frameFill1, frameAccent1, slatTint1, pDown1, lampOn1);
+    const w2 = isDouble
+      ? buildOne(2, OPEN_X_2, isOpen2, frameFill2, frameAccent2, slatTint2, pDown2, lampOn2)
+      : null;
+
+    const svgMarkup = `
+      <svg class="sensor-svg" width="100%" height="100%" viewBox="0 0 ${VB_W} ${VB_H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Window">
+        <defs>
+          ${w1.defs}
+          ${w2 ? w2.defs : ""}
+        </defs>
+        ${w1.markup}
+        ${w2 ? w2.markup : ""}
+      </svg>
+    `;
+
+    this._gdPendingMarkup = svgMarkup;
+    return html`<div class="asc-gd-dom" id="asc-gd-dom-${this._instanceId}"></div>`;
+  }
+
+
 _gateSvg(opts) {
   const { interval } = opts;
 
@@ -5666,16 +6054,13 @@ const isOpen1 = _winIsOpenFromId(mainId1);
 const isOpen2 = isDouble ? _winIsOpenFromId(mainId2 || mainId1) : false;
 
 // Blind position entity drives venetian coverage (0..100, where 0 = fully up/open, 100 = fully down/closed)
-      
-// Blind position entity drives venetian coverage (0..100, where 0 = fully up/open, 100 = fully down/closed)
-const _winPDownFromPosId = (eid, mode = "auto", attrName = "") => {
+      const _winPDownFromPosId = (eid) => {
   try {
     const id = String(eid || "").trim();
     if (!id || !this.hass?.states?.[id]) return 0;
-
     const st = this.hass.states[id];
     const dom = String(id).split(".")[0] || "";
-
+    const cp = st?.attributes?.current_position;
     const clamp01 = (x) => Math.max(0, Math.min(1, x));
     const toNum = (v) => {
       if (v == null) return null;
@@ -5687,76 +6072,19 @@ const _winPDownFromPosId = (eid, mode = "auto", attrName = "") => {
       return Number.isFinite(n) ? n : null;
     };
 
-    const normMode = String(mode || "auto").trim().toLowerCase();
-    const pickAttr = (name) => {
-      const key = String(name || "").trim();
-      if (!key) return null;
-      return st?.attributes?.[key];
-    };
-
-    // 1) Attribute mode (explicit)
-    if (normMode === "attribute") {
-      const v = pickAttr(attrName);
-      const n = toNum(v);
-      if (n == null) return 0;
-
-      // If the source is a cover and attribute looks like "open percent", invert to "down percent".
-      // For non-cover numeric helpers/sensors, we assume 0=up, 100=down.
-      if (n >= 0 && n <= 1) return clamp01(n);
-      if (n >= 0 && n <= 100) {
-        const p = clamp01(n / 100);
-        return (dom === "cover") ? (1 - p) : p;
+    if (cp != null) {
+      const n = toNum(cp);
+      if (n != null) {
+        const pOpen = clamp01(n / 100); // HA cover: 0=closed, 100=open
+        return (dom === "cover") ? (1 - pOpen) : pOpen;
       }
-      return 0;
     }
 
-    // 2) Open/close mode (explicit)
-    if (normMode === "openclose") {
-      const s = String(st.state ?? "").trim().toLowerCase();
-      if (s === "open" || s === "opening" || s === "on" || s === "true") return 0;
-      if (s === "closed" || s === "closing" || s === "off" || s === "false") return 1;
-      return 0;
-    }
-
-    // 3) State-numeric mode (explicit)
-    const tryNumericState = () => {
-      const nState = toNum(st.state);
-      if (nState == null) return null;
+    const nState = toNum(st.state);
+    if (nState != null) {
       if (nState >= 0 && nState <= 1) return clamp01(nState);
       if (nState >= 0 && nState <= 100) return clamp01(nState / 100); // assume 0=up/open, 100=down/closed
-      return null;
-    };
-
-    if (normMode === "state") {
-      const p = tryNumericState();
-      return p == null ? 0 : p;
     }
-
-    // AUTO mode:
-    // Prefer explicit attribute name if provided, then common cover attributes,
-    // then numeric state, then open/closed mapping.
-    const autoAttrCandidates = [];
-    const explicitAttr = String(attrName || "").trim();
-    if (explicitAttr) autoAttrCandidates.push(explicitAttr);
-    autoAttrCandidates.push("current_position", "position", "current_level", "level", "percentage", "percent", "value");
-
-    for (const k of autoAttrCandidates) {
-      const v = pickAttr(k);
-      if (v == null) continue;
-      const n = toNum(v);
-      if (n == null) continue;
-      if (n >= 0 && n <= 1) return clamp01(n);
-      if (n >= 0 && n <= 100) {
-        const p = clamp01(n / 100);
-        // If it's a cover (or the attribute is the standard current_position/position),
-        // treat it as "open percent" and invert to "down percent".
-        const invert = (dom === "cover") || k === "current_position" || k === "position";
-        return invert ? (1 - p) : p;
-      }
-    }
-
-    const pNum = tryNumericState();
-    if (pNum != null) return pNum;
 
     const s = String(st.state ?? "").trim().toLowerCase();
     if (s === "open" || s === "opening" || s === "on" || s === "true") return 0;
@@ -5768,14 +6096,8 @@ const _winPDownFromPosId = (eid, mode = "auto", attrName = "") => {
 const posId1 = String(this._config?.blind_position_entity || "").trim();
 const posId2 = String(this._config?.blind_position_entity2 || "").trim();
 
-const posMode1 = String(this._config?.blind_position_mode || "auto").trim().toLowerCase();
-const posAttr1 = String(this._config?.blind_position_attribute || "").trim();
-
-const posMode2 = String(this._config?.blind_position_mode2 || posMode1).trim().toLowerCase();
-const posAttr2 = String(this._config?.blind_position_attribute2 || posAttr1).trim();
-
-const pDown1 = _winPDownFromPosId(posId1, posMode1, posAttr1);
-const pDown2 = isDouble ? _winPDownFromPosId((posId2 || posId1), posMode2, posAttr2) : 0;
+const pDown1 = _winPDownFromPosId(posId1);
+const pDown2 = isDouble ? _winPDownFromPosId(posId2 || posId1) : 0;
 
 const posPct1 = Math.round(pDown1 * 100);
 const posPct2 = Math.round(pDown2 * 100);
@@ -5991,10 +6313,10 @@ const glow = `
         return { defs, markup };
       };
 
-      const w1 = buildOne(OPEN_X_1, isOpen1, frameFill1, frameAccent1, slatTint1, pDown1, lampOn1);
+      const w1 = buildOne(1, OPEN_X_1, isOpen1, frameFill1, frameAccent1, slatTint1, pDown1, lampOn1);
 
       const w2 = isDouble
-        ? buildOne(OPEN_X_2, isOpen2, frameFill2, frameAccent2, slatTint2, pDown2, lampOn2)
+        ? buildOne(2, OPEN_X_2, isOpen2, frameFill2, frameAccent2, slatTint2, pDown2, lampOn2)
         : null;
 
       const svgMarkup = `
@@ -6127,6 +6449,8 @@ const glow = `
         for (let i = 0; i < count; i++) {
           const yy = IN_Y + i * (IN_H / count);
           const h = IN_H / count;
+          const gap = Math.max(1.6, h * 0.28);
+          const slatFillH = Math.max(2.8, h - gap);
           const tilt = 1.2; // small tilt for realism
           slatLinesStr += `
             <path d="M ${x0.toFixed(2)} ${yy.toFixed(2)}
@@ -8318,10 +8642,6 @@ const DEFAULTS = {
   blind_style: "persienne",
   blind_position_entity: "",
   blind_position_entity2: "",
-  blind_position_mode: "auto",
-  blind_position_attribute: "",
-  blind_position_mode2: "auto",
-  blind_position_attribute2: "",
   image_source: "url",
   image_url: "",
   image_media: "",
@@ -8381,6 +8701,7 @@ incomingRaw.symbol =
   (sym === "gas_cylinder") ? "gas_cylinder" :
   (sym === "garage_door") ? "garage_door" :
   (sym === "blind") ? "blind" :
+  (sym === "window") ? "window" :
   (sym === "gate") ? "gate" :
   (sym === "image") ? "image" :
   (sym === "battery_liquid_modern") ? "battery_liquid_modern" :
@@ -8912,6 +9233,7 @@ const rowSym = document.createElement("div");
       ["tumble_dryer", "Tumble dryer"], //v1.0.6
       ["garage_door", "Garage door"], //v1.6.15
       ["blind", "Blind"], //v1.6.26
+      ["window", "Window"], //v1.6.XX
       ["gate", "Gate"], //v1.6.30
       ["image", "Image"], //v1.6.38
       ["gas_cylinder", "Gas cylinder"], //v1.0.2
@@ -9130,6 +9452,23 @@ rowGarageLamp.appendChild(this._elGarageLamp1);
 this._rowGarageLamp = rowGarageLamp;
 root.appendChild(rowGarageLamp);
 
+// Window state entities (only when symbol is Window)
+const rowWindowState = document.createElement("div");
+rowWindowState.className = "grid1";
+this._elWindowState1 = mkEntityControl("WindowState entity (open/closed)", "window_state_entity");
+rowWindowState.appendChild(this._elWindowState1);
+this._rowWindowState = rowWindowState;
+root.appendChild(rowWindowState);
+
+// Second WindowState entity (only for double)
+const rowWindowState2 = document.createElement("div");
+rowWindowState2.className = "grid1";
+this._elWindowState2 = mkEntityControl("Second WindowState entity (open/closed)", "window_state_entity2");
+rowWindowState2.appendChild(this._elWindowState2);
+this._rowWindowState2 = rowWindowState2;
+root.appendChild(rowWindowState2);
+
+
 // Garage door 2 entities (only for double)
 const rowGarage2 = document.createElement("div");
 rowGarage2.className = "grid2";
@@ -9158,64 +9497,21 @@ root.appendChild(rowBlind);
 // Blind position entity (only when symbol is Blind AND style is Window)
 const rowBlindPos = document.createElement("div");
 rowBlindPos.className = "grid1";
-this._elBlindPos = mkEntityControl("First window blind position entity (Used to animate blind)", "blind_position_entity");
+this._elBlindPos = mkEntityControl("Blind position entity (0..100)", "blind_position_entity");
 rowBlindPos.appendChild(this._elBlindPos);
 this._rowBlindPos = rowBlindPos;
 root.appendChild(rowBlindPos);
-
-// Blind position source + attribute (only when Blind + Window)
-const rowBlindPosSrc = document.createElement("div");
-rowBlindPosSrc.className = "grid2";
-this._elBlindPosMode = mkSelect("Blind position source", "blind_position_mode", [
-  ["auto", "Auto detect (recommended)"],
-  ["attribute", "Use attribute"],
-  ["state", "Use numeric state"],
-  ["openclose", "Use open/closed"]
-]);
-this._elBlindPosAttr = mkText("Blind position attribute (optional)", "blind_position_attribute", "text", "current_position");
-rowBlindPosSrc.appendChild(this._elBlindPosMode);
-rowBlindPosSrc.appendChild(this._elBlindPosAttr);
-this._rowBlindPosSrc = rowBlindPosSrc;
-root.appendChild(rowBlindPosSrc);
-
-// Hint for users: cover entities expose position as % open (100=open), while this window blind
-// expects % down (100=fully down). We auto-invert cover-like positions.
-const blindPosHint = document.createElement("div");
-blindPosHint.className = "hint";
-blindPosHint.innerText = "Tip: For cover/blind entities, Home Assistant position is % OPEN (100=open, 0=closed). This card automatically inverts that to % DOWN for the window blind (100=down). If you use an input_number/sensor, use 0=up and 100=down.";
-root.appendChild(blindPosHint);
 
 
 
 // Second blind position entity (only when Blind + Window + Double)
 const rowBlindPos2 = document.createElement("div");
 rowBlindPos2.className = "grid1";
-this._elBlindPos2 = mkEntityControl("Second window blind position entity (Used to animate blind)", "blind_position_entity2");
+this._elBlindPos2 = mkEntityControl("Second blind position entity (0..100)", "blind_position_entity2");
 rowBlindPos2.appendChild(this._elBlindPos2);
 this._rowBlindPos2 = rowBlindPos2;
 root.appendChild(rowBlindPos2);
 
-// Second blind position source + attribute (only when Blind + Window + Double)
-const rowBlindPosSrc2 = document.createElement("div");
-rowBlindPosSrc2.className = "grid2";
-this._elBlindPosMode2 = mkSelect("Second blind position source", "blind_position_mode2", [
-  ["auto", "Auto detect (recommended)"],
-  ["attribute", "Use attribute"],
-  ["state", "Use numeric state"],
-  ["openclose", "Use open/closed"]
-]);
-this._elBlindPosAttr2 = mkText("Second blind position attribute (optional)", "blind_position_attribute2", "text", "current_position");
-rowBlindPosSrc2.appendChild(this._elBlindPosMode2);
-rowBlindPosSrc2.appendChild(this._elBlindPosAttr2);
-this._rowBlindPosSrc2 = rowBlindPosSrc2;
-root.appendChild(rowBlindPosSrc2);
-
-const blindPosHint2 = document.createElement("div");
-blindPosHint2.className = "hint";
-blindPosHint2.innerText = "Tip: Same rule for the second window: cover position is % OPEN (100=open). The card inverts it to % DOWN. For numeric helpers, use 0=up and 100=down.";
-root.appendChild(blindPosHint2);
-
-	
     // Window lamp opacity (only when Blind + Window)
     const rowWinLampOp = document.createElement("div");
     rowWinLampOp.className = "grid1";
@@ -9904,7 +10200,7 @@ varsHead.innerHTML = `
     
 // Garage door / Blind options visibility
 const isBlind = (baseSym === "blind");
-const isGarage = (baseSym === "garage_door" || baseSym === "blind");
+const isGarage = (baseSym === "garage_door" || baseSym === "blind" || baseSym === "window");
 const garageType = String(this._config.garage_door_type || "single");
 const isGarageDouble = isGarage && (garageType === "double");
 
@@ -9912,8 +10208,8 @@ if (this._rowGarage && this._elGarageType && this._elGarageWidth && this._elGara
   this._rowGarage.style.display = isGarage ? "" : "none";
 
   // Dynamic labels (Door vs Blind)
-  this._elGarageType.label = isBlind ? "Blind type" : "Door type";
-  this._elGarageWidth.label = isBlind ? "Blind width" : "Door width";
+  this._elGarageType.label = (baseSym === "blind") ? "Blind type" : ((baseSym === "window") ? "Window type" : "Door type");
+  this._elGarageWidth.label = (baseSym === "blind") ? "Blind width" : ((baseSym === "window") ? "Window width" : "Door width");
 
   this._elGarageType.value = garageType;
   this._elGarageWidth.value = String(this._config.garage_door_width ?? 200);
@@ -9928,7 +10224,7 @@ if (this._rowGarageLamp && this._elGarageLamp1) {
   const isBlindWindow = (isBlind && blindStyle === "window");
   this._rowGarageLamp.style.display = (isGarage || isBlindWindow) ? "" : "none";
 
-  this._elGarageLamp1.label = isBlindWindow ? "First window inside lamp entity" : "First garage inside lamp entity";
+  this._elGarageLamp1.label = (baseSym === "window" || isBlindWindow) ? "First window inside lamp entity" : "First garage inside lamp entity";
   this._elGarageLamp1.hass = this._hass;
   this._elGarageLamp1.value = this._config.garage_door_lamp_entity || "";
 }
@@ -9939,16 +10235,36 @@ if (this._rowGarage2 && this._elGarageDoor2 && this._elGarageLamp2) {
   this._rowGarage2.style.display = isGarageDouble ? "" : "none";
   // Dynamic label (Door vs Blind)
   try {
-    this._elGarageDoor2.label = isBlind ? "Second window entity" : "Second garage door entity";
+    this._elGarageDoor2.label = (baseSym === "blind") ? "Second blind entity" : ((baseSym === "window") ? "Second window entity" : "Second garage door entity");
   } catch(e) {}
   try {
-    this._elGarageLamp2.label = isBlindWindow ? "Second window inside lamp entity" : "Second inside lamp entity";
+    this._elGarageLamp2.label = (baseSym === "window" || isBlindWindow) ? "Second window inside lamp entity" : "Second inside lamp entity";
   } catch(e) {}
   this._elGarageDoor2.hass = this._hass;
   this._elGarageDoor2.value = this._config.garage_door_entity2 || "";
   this._elGarageLamp2.hass = this._hass;
   this._elGarageLamp2.value = this._config.garage_door_lamp_entity2 || "";
 }
+
+
+
+// WindowState entities visibility (only for Window symbol)
+if (this._rowWindowState && this._elWindowState1) {
+  const isWindow = (baseSym === "window");
+  this._rowWindowState.style.display = isWindow ? "" : "none";
+  this._elWindowState1.hass = this._hass;
+  this._elWindowState1.value = String(this._config.window_state_entity || "");
+}
+
+if (this._rowWindowState2 && this._elWindowState2) {
+  const isWindow = (baseSym === "window");
+  const gt = String(this._config.garage_door_type || "single").trim().toLowerCase();
+  const isDouble = (gt === "double");
+  this._rowWindowState2.style.display = (isWindow && isDouble) ? "" : "none";
+  this._elWindowState2.hass = this._hass;
+  this._elWindowState2.value = String(this._config.window_state_entity2 || "");
+}
+
 
 
 // Gate options visibility
@@ -9975,19 +10291,6 @@ if (this._rowBlindPos && this._elBlindPos) {
   this._elBlindPos.hass = this._hass;
   this._elBlindPos.value = String(this._config.blind_position_entity || "");
 
-  // Blind position source/attribute visibility (only for Window style)
-  if (this._rowBlindPosSrc && this._elBlindPosMode && this._elBlindPosAttr) {
-    const showBlind = (baseSym === "blind");
-    const bs = String(this._config.blind_style || "persienne").trim().toLowerCase();
-    const show = (showBlind && bs === "window");
-    this._rowBlindPosSrc.style.display = show ? "" : "none";
-    this._elBlindPosMode.value = String(this._config.blind_position_mode || "auto");
-    this._elBlindPosAttr.value = String(this._config.blind_position_attribute || "");
-    const m = String(this._config.blind_position_mode || "auto").trim().toLowerCase();
-    // Only show attribute field when attribute mode is selected
-    this._elBlindPosAttr.style.display = (m === "attribute") ? "" : "none";
-  }
-
 
 // Second blind position entity visibility (only for Window style + Double)
 if (this._rowBlindPos2 && this._elBlindPos2) {
@@ -9998,28 +10301,14 @@ if (this._rowBlindPos2 && this._elBlindPos2) {
   this._rowBlindPos2.style.display = (showBlind && bs === "window" && isDouble) ? "" : "none";
   this._elBlindPos2.hass = this._hass;
   this._elBlindPos2.value = String(this._config.blind_position_entity2 || "");
-
-  // Second blind position source/attribute visibility (only for Window style + Double)
-  if (this._rowBlindPosSrc2 && this._elBlindPosMode2 && this._elBlindPosAttr2) {
-    const showBlind = (baseSym === "blind");
-    const bs = String(this._config.blind_style || "persienne").trim().toLowerCase();
-    const gt = String(this._config.garage_door_type || "single").trim().toLowerCase();
-    const isDouble = (gt === "double");
-    const show = (showBlind && bs === "window" && isDouble);
-    this._rowBlindPosSrc2.style.display = show ? "" : "none";
-    this._elBlindPosMode2.value = String(this._config.blind_position_mode2 || this._config.blind_position_mode || "auto");
-    this._elBlindPosAttr2.value = String(this._config.blind_position_attribute2 || this._config.blind_position_attribute || "");
-    const m = String(this._config.blind_position_mode2 || this._config.blind_position_mode || "auto").trim().toLowerCase();
-    this._elBlindPosAttr2.style.display = (m === "attribute") ? "" : "none";
-  }
 }
 
 
 // Window lamp opacity visibility (only for Window style)
 if (this._rowWinLampOp && this._elWindowLampOpacity) {
-  const showBlind = (baseSym === "blind");
   const bs = String(this._config.blind_style || "persienne").trim().toLowerCase();
-  this._rowWinLampOp.style.display = (showBlind && bs === "window") ? "" : "none";
+  const showWinLamp = (baseSym === "window") || (baseSym === "blind" && bs === "window");
+  this._rowWinLampOp.style.display = showWinLamp ? "" : "none";
   this._elWindowLampOpacity.value = String(this._config.window_lamp_opacity ?? 0.5);
 }
 
@@ -10028,7 +10317,7 @@ if (this._rowWinLampOp && this._elWindowLampOpacity) {
 
 // Tap confirm safety visibility (Gate/Garage/Blind)
 if (this._rowTapConfirmOpen && this._swTapConfirmOpen && this._tfTapConfirmOpenWindow) {
-  const showConfirm = (baseSym === "gate" || baseSym === "garage_door" || (baseSym === "blind" && String(this._config.blind_style || "persienne").trim().toLowerCase() !== "window"));
+  const showConfirm = (baseSym === "gate" || baseSym === "garage_door" || baseSym === "window" || (baseSym === "blind" && String(this._config.blind_style || "persienne").trim().toLowerCase() !== "window"));
   this._rowTapConfirmOpen.style.display = showConfirm ? "" : "none";
   if (this._tapConfirmHint) this._tapConfirmHint.style.display = showConfirm ? "" : "none";
 
@@ -10333,7 +10622,7 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
     grid.className = "draftGrid2";
 
     const _symNow = String(this._config?.symbol || "");
-    const showSeconds = (_symNow === "garage_door" || _symNow === "washing_machine" || _symNow === "tumble_dryer");
+    const showSeconds = (_symNow === "garage_door" || _symNow === "window" || _symNow === "washing_machine" || _symNow === "tumble_dryer");
 
     // Optional static match (exact match, case-insensitive) for non-numeric states
     const tfMatch = document.createElement("ha-textfield");
@@ -12980,6 +13269,22 @@ _centerBadgePreviewNow(badgeOrObj) {
 
     return this._commit(key, value);
   }
+
+  disconnectedCallback() {
+    try {
+      if (this._ascDragEndBound) {
+        window.removeEventListener("asc-badge-drag-end", this._ascDragEndBound);
+        this._ascDragEndBound = null;
+      }
+    } catch (_) {}
+    try {
+      if (this._editBlurTimer) {
+        clearTimeout(this._editBlurTimer);
+        this._editBlurTimer = 0;
+      }
+    } catch (_) {}
+  }
+
 }
 
 if (!customElements.get(EDITOR_TAG)) {
