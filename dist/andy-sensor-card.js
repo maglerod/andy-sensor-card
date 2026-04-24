@@ -20,10 +20,6 @@ const CARD_NAME = "Andy Sensor Card";
 const CARD_VERSION = "1.0.7";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
 
-const CARD_TAG = "andy-sensor-card";
-const EDITOR_TAG = "andy-sensor-card-editor";
-
-
 //console.info(CARD_TAGLINE);
 
 console.info(
@@ -41,11 +37,17 @@ console.info(
 );
 
 
+
+
 const LitElement =
   window.LitElement || Object.getPrototypeOf(customElements.get("ha-panel-lovelace"));
 const html = window.html || LitElement.prototype.html;
 const css = window.css || LitElement.prototype.css;
 
+
+// Card tag + editor tag (reuse everywhere)
+const CARD_TAG = "andy-sensor-card";
+const EDITOR_TAG = "andy-sensor-card-editor";
 
 // Battery-friendly default intervals (0..100)
 const DEFAULT_INTERVALS = [
