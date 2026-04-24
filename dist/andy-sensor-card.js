@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.6.1beta
+ * Andy Sensor Card v1.0.7
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -17,7 +17,7 @@
 */
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.6.1beta";
+const CARD_VERSION = "1.0.7";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
 
 const CARD_TAG = "andy-sensor-card";
@@ -158,6 +158,35 @@ function toNumberMaybe(v) {
   if (sl === "off" || sl === "false" || sl === "closed" || sl === "idle" || sl === "stopped") return 0;
 
   return null;
+}
+function fanValueToSpeedFraction(value, minV = 0, maxV = 100) {
+  let minS = Number(minV);
+  let maxS = Number(maxV);
+  if (!Number.isFinite(minS)) minS = 0;
+  if (!Number.isFinite(maxS)) maxS = 100;
+  if (maxS < minS) [minS, maxS] = [maxS, minS];
+
+  const raw = toNumberMaybe(value);
+  if (!Number.isFinite(raw)) return { raw: null, dir: 1, vPct: 0 };
+
+  const dir = (raw < 0) ? -1 : 1;
+  const absRaw = Math.abs(raw);
+  const rawStr = String(value ?? "").trim();
+  const hasDecimalHint = /[.,]/.test(rawStr);
+
+  // Support decimal fractions on the default 0..100 fan scale:
+  // 0.10 => 10%, 1.0 => 100%.
+  if (minS === 0 && maxS === 100 && absRaw <= 1 && (hasDecimalHint || absRaw < 1)) {
+    return { raw, dir, vPct: clamp01(absRaw) };
+  }
+
+  if (minS < 0 && maxS > 0) {
+    const maxAbs = Math.max(Math.abs(minS), Math.abs(maxS)) || 1;
+    return { raw, dir, vPct: clamp01(absRaw / maxAbs) };
+  }
+
+  const range = (maxS - minS) || 1;
+  return { raw, dir, vPct: clamp01((raw - minS) / range) };
 }
 function normalizeInterval(it) {
   const out = { ...(it || {}) };
@@ -610,6 +639,11 @@ this._gateAnimRaf = 0;
     this._ascPrevScrollOnScroll = null;
   }
 
+  getCardSize() {
+    const scale = Math.max(0.75, Math.min(2.5, Number(this._config?.card_scale ?? 1) || 1));
+    return Math.max(3, Math.ceil(4 * scale));
+  }
+
   connectedCallback() {
     super.connectedCallback();
     // Detect HA visual editor preview (robust across Shadow DOM)
@@ -692,6 +726,7 @@ this._gateAnimRaf = 0;
       // Safety confirm before opening when state is closed (Gate/Garage/Blind)
       tap_confirm_open: false,
       tap_confirm_open_window: 10,
+      tap_confirm_open_anywhere: false,
       name_position: "top_left",
   name_offset_x: 0,
   name_offset_y: 0,
@@ -935,6 +970,7 @@ const rawSym = String(this._config.symbol || "battery_liquid");
 
     // Tap confirm safety (Gate/Garage/Blind)
     this._config.tap_confirm_open = !!this._config.tap_confirm_open;
+    this._config.tap_confirm_open_anywhere = !!this._config.tap_confirm_open_anywhere;
     let _tcw = Number(this._config.tap_confirm_open_window);
     if (!Number.isFinite(_tcw) || _tcw <= 0) _tcw = 10;
     this._config.tap_confirm_open_window = Math.max(1, Math.min(60, Math.round(_tcw)));
@@ -2475,14 +2511,11 @@ _onBadgeSliderChange(ev, badge) {
     try { this.requestUpdate?.(); } catch (_) {}
   }
 
-  _onTapConfirmLock(ev) {
-    try { ev?.stopPropagation?.(); } catch (_) {}
-    try { ev?.preventDefault?.(); } catch (_) {}
-
-    const p = this._tapConfirmOpen;
+  _executeTapConfirmOpen(payload = null) {
+    const p = payload || this._tapConfirmOpen;
     if (!p || Date.now() > (p.until || 0)) {
       this._clearTapConfirmOpen();
-      return;
+      return false;
     }
 
     const act = String(p.act || "");
@@ -2504,6 +2537,13 @@ _onBadgeSliderChange(ev, badge) {
     } catch (_) {}
 
     this._clearTapConfirmOpen();
+    return true;
+  }
+
+  _onTapConfirmLock(ev) {
+    try { ev?.stopPropagation?.(); } catch (_) {}
+    try { ev?.preventDefault?.(); } catch (_) {}
+    this._executeTapConfirmOpen();
   }
 
   _renderTapConfirmLock() {
@@ -2515,8 +2555,11 @@ _onBadgeSliderChange(ev, badge) {
       const p = this._tapConfirmOpen;
       if (!p || Date.now() > (p.until || 0)) return html``;
 
+      const allowAnywhere = !!this._config?.tap_confirm_open_anywhere;
+      const title = allowAnywhere ? "Tap anywhere or the lock to confirm open" : "Tap the lock to confirm open";
+
       return html`
-        <div class="tapConfirmLock" @click=${(e) => this._onTapConfirmLock(e)} title="Tap to confirm open">
+        <div class="tapConfirmLock" @click=${(e) => this._onTapConfirmLock(e)} title="${title}" aria-label="${title}">
           <ha-icon .icon=${"mdi:lock"}></ha-icon>
         </div>
       `;
@@ -2541,6 +2584,15 @@ _onBadgeSliderChange(ev, badge) {
         const st = this.hass?.states?.[entityId];
         const raw = st?.state;
         if (this._isClosedLikeState(raw)) {
+          const pending = this._tapConfirmOpen;
+          const samePending = !!pending
+            && Date.now() <= (pending.until || 0)
+            && String(pending.entityId || "") === String(entityId || "");
+          if (samePending && this._config?.tap_confirm_open_anywhere) {
+            this._executeTapConfirmOpen(pending);
+            return;
+          }
+
           if (act === "toggle") {
             this._armTapConfirmOpen({ entityId, act: "toggle" });
           } else {
@@ -5324,25 +5376,9 @@ _heatpumpSvg(opts) {
   const gFrom = normalizeHex(it.gradient?.from, cSolid);
   const gTo = normalizeHex(it.gradient?.to, gFrom);
 
-  let minS = Number(this._config.min ?? 0);
-  let maxS = Number(this._config.max ?? 100);
-  if (!Number.isFinite(minS)) minS = 0;
-  if (!Number.isFinite(maxS)) maxS = 100;
-  if (maxS < minS) [minS, maxS] = [maxS, minS];
-
-  const raw = toNumberMaybe(value);
-  const dir = (Number.isFinite(raw) && raw < 0) ? -1 : 1;
-
-  let vPct = 0;
-  if (Number.isFinite(raw)) {
-    if (minS < 0 && maxS > 0) {
-      const maxAbs = Math.max(Math.abs(minS), Math.abs(maxS)) || 1;
-      vPct = clamp01(Math.abs(raw) / maxAbs);
-    } else {
-      const range = (maxS - minS) || 1;
-      vPct = clamp01((raw - minS) / range);
-    }
-  }
+  const minS = Number(this._config.min ?? 0);
+  const maxS = Number(this._config.max ?? 100);
+  const { vPct, dir } = fanValueToSpeedFraction(value, minS, maxS);
 
   const windOpacity = clamp01((vPct - 0.55) / 0.45) * 0.75;
   const windDur = (vPct <= 0.55) ? 1.6 : (1.6 - clamp01((vPct - 0.55) / 0.45) * 0.9);
@@ -6583,27 +6619,9 @@ _fanBaseSvg(opts, framed) {
   const gFrom = normalizeHex(it.gradient?.from, cSolid);
   const gTo = normalizeHex(it.gradient?.to, gFrom);
 
-  let minS = Number(this._config.min ?? 0);
-  let maxS = Number(this._config.max ?? 100);
-  if (!Number.isFinite(minS)) minS = 0;
-  if (!Number.isFinite(maxS)) maxS = 100;
-  if (maxS < minS) [minS, maxS] = [maxS, minS];
-
-  // Robust numeric parse (handles "55 %", "-12,3 kW", etc.)
-  const raw = toNumberMaybe(value);
-  const dir = (Number.isFinite(raw) && raw < 0) ? -1 : 1;
-
-  // Normalize speed percent (0..1)
-  let vPct = 0;
-  if (Number.isFinite(raw)) {
-    if (minS < 0 && maxS > 0) {
-      const maxAbs = Math.max(Math.abs(minS), Math.abs(maxS)) || 1;
-      vPct = clamp01(Math.abs(raw) / maxAbs);
-    } else {
-      const range = (maxS - minS) || 1;
-      vPct = clamp01((raw - minS) / range);
-    }
-  }
+  const minS = Number(this._config.min ?? 0);
+  const maxS = Number(this._config.max ?? 100);
+  const { vPct, dir } = fanValueToSpeedFraction(value, minS, maxS);
 
   // Wind overlay intensity (0..0.75) kicks in above ~55%
   const windOpacity = clamp01((vPct - 0.55) / 0.45) * 0.75;
@@ -6773,25 +6791,9 @@ _badgeFanMarkup(opts, badge) {
   const gFrom = normalizeHex(it.gradient?.from, cSolid);
   const gTo = normalizeHex(it.gradient?.to, gFrom);
 
-  let minS = Number(this._config.min ?? 0);
-  let maxS = Number(this._config.max ?? 100);
-  if (!Number.isFinite(minS)) minS = 0;
-  if (!Number.isFinite(maxS)) maxS = 100;
-  if (maxS < minS) [minS, maxS] = [maxS, minS];
-
-  const raw = toNumberMaybe(value);
-  const dir = (Number.isFinite(raw) && raw < 0) ? -1 : 1;
-
-  let vPct = 0;
-  if (Number.isFinite(raw)) {
-    if (minS < 0 && maxS > 0) {
-      const maxAbs = Math.max(Math.abs(minS), Math.abs(maxS)) || 1;
-      vPct = clamp01(Math.abs(raw) / maxAbs);
-    } else {
-      const range = (maxS - minS) || 1;
-      vPct = clamp01((raw - minS) / range);
-    }
-  }
+  const minS = Number(this._config.min ?? 0);
+  const maxS = Number(this._config.max ?? 100);
+  const { vPct, dir } = fanValueToSpeedFraction(value, minS, maxS);
 
   const windOpacity = clamp01((vPct - 0.55) / 0.45) * 0.75;
   const windDur = (vPct <= 0.55) ? 1.6 : (1.6 - clamp01((vPct - 0.55) / 0.45) * 0.9);
@@ -7788,11 +7790,11 @@ _waterLevelSegmentsSvg(opts) {
 
   static get styles() {
     return css`
-      :host { display:block; }
-      ha-card { border-radius: 18px; overflow: hidden; }
+      :host { display:block; isolation:isolate; }
+      ha-card { border-radius: 18px; overflow: hidden; position: relative; isolation:isolate; }
       :host([data-asc-preview="1"]) ha-card { height: 100% !important; max-height: 100% !important; overflow: auto !important; }
 
-      .wrap { position: relative; padding: calc(16px * var(--asc-scale, 1)); height: 100%; box-sizing: border-box; }
+      .wrap { position: relative; padding: calc(16px * var(--asc-scale, 1)); height: 100%; box-sizing: border-box; isolation:isolate; }
       :host([data-asc-preview="1"]) .wrap { height: var(--asc-card-height, 100%); }
 
       .header { display:flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: calc(10px * var(--asc-scale, 1) * var(--asc-gap-mult, 1)); }
@@ -8622,6 +8624,13 @@ const DEFAULTS = {
   charging_state_entity2: "",
   charging_power_entity2: "",
   symbol: "battery_liquid",
+  tap_action: "more-info",
+  tap_action_service: "",
+  tap_action_service_data: "",
+  tap_action_service_picker: true,
+  tap_confirm_open: false,
+  tap_confirm_open_window: 10,
+  tap_confirm_open_anywhere: false,
   min: 0,
   max: 100,
   unit: "",
@@ -8631,6 +8640,7 @@ const DEFAULTS = {
       name_font_size: 0,
   glass: true,
   orientation: "vertical",
+  fan_show_frame: false,
   fan_blade_count: 3,
   garage_door_type: "single",
   blind_style: "persienne",
@@ -8674,6 +8684,10 @@ class AndySensorCardEditor extends HTMLElement {
     incomingRaw.scale_color_mode = (String(incomingRaw.scale_color_mode) === "active_interval") ? "active_interval" : "per_interval";
 
     incomingRaw.badge_drag_enabled = !!incomingRaw.badge_drag_enabled;
+    incomingRaw.tap_action_service_picker = (incomingRaw.tap_action_service_picker == null) ? true : !!incomingRaw.tap_action_service_picker;
+    incomingRaw.tap_confirm_open = !!incomingRaw.tap_confirm_open;
+    incomingRaw.tap_confirm_open_anywhere = !!incomingRaw.tap_confirm_open_anywhere;
+    incomingRaw.fan_show_frame = !!incomingRaw.fan_show_frame;
 
 
     incomingRaw.fan_blade_count = clampInt(incomingRaw.fan_blade_count ?? 3, 2, 8, 3);
@@ -9175,12 +9189,27 @@ const stopBubble = (e) => {
     this._rowTapConfirmOpen.appendChild(ffConfirm);
     this._rowTapConfirmOpen.appendChild(this._tfTapConfirmOpenWindow);
 
+    this._rowTapConfirmOpenAnywhere = document.createElement("div");
+    this._rowTapConfirmOpenAnywhere.className = "grid1";
+    this._rowTapConfirmOpenAnywhere.style.display = "none";
+
+    const ffConfirmAnywhere = document.createElement("ha-formfield");
+    ffConfirmAnywhere.label = "Second tap anywhere confirms open";
+    this._swTapConfirmOpenAnywhere = document.createElement("ha-switch");
+    this._swTapConfirmOpenAnywhere.configValue = "tap_confirm_open_anywhere";
+    this._swTapConfirmOpenAnywhere.checked = !!this._config?.tap_confirm_open_anywhere;
+    this._swTapConfirmOpenAnywhere.addEventListener("change", (e) => this._onChange(e));
+    this._swTapConfirmOpenAnywhere.addEventListener("value-changed", (e) => this._onChange(e));
+    ffConfirmAnywhere.appendChild(this._swTapConfirmOpenAnywhere);
+    this._rowTapConfirmOpenAnywhere.appendChild(ffConfirmAnywhere);
+
     this._tapConfirmHint = document.createElement("div");
     this._tapConfirmHint.className = "hint";
-    this._tapConfirmHint.innerText = "When the entity is closed, the first tap shows a lock. Tap the lock within the time window to run the tap action.";
+    this._tapConfirmHint.innerText = "When the entity is closed, the first tap shows a lock. Confirm by tapping the lock, or optionally anywhere on the card, within the time window to run the tap action.";
     this._tapConfirmHint.style.display = "none";
 
     root.appendChild(this._rowTapConfirmOpen);
+    root.appendChild(this._rowTapConfirmOpenAnywhere);
     root.appendChild(this._tapConfirmHint);
 
     this._elEntity2 = mkEntityControl("Second Entity splitted symbol (Battery)", "entity2");
@@ -10319,6 +10348,10 @@ if (this._rowTapConfirmOpen && this._swTapConfirmOpen && this._tfTapConfirmOpenW
   this._tfTapConfirmOpenWindow.value = String(this._config.tap_confirm_open_window ?? 10);
   // Only show seconds field when enabled
   this._tfTapConfirmOpenWindow.style.display = this._swTapConfirmOpen.checked ? "" : "none";
+  if (this._rowTapConfirmOpenAnywhere && this._swTapConfirmOpenAnywhere) {
+    this._rowTapConfirmOpenAnywhere.style.display = (showConfirm && this._swTapConfirmOpen.checked) ? "" : "none";
+    this._swTapConfirmOpenAnywhere.checked = !!this._config.tap_confirm_open_anywhere;
+  }
 }
 
 // Image options visibility
@@ -13234,7 +13267,7 @@ _centerBadgePreviewNow(badgeOrObj) {
 
     let value = this._eventValue(ev, target);
 //v1.0.2
-    if (key === "min" || key === "max" || key === "value_font_size" || key === "name_font_size" || key === "stats_hours" || key === "card_scale" || key === "segment_gap" || key === "name_offset_x" || key === "name_offset_y" || key === "value_offset_x" || key === "value_offset_y") {
+    if (key === "min" || key === "max" || key === "value_font_size" || key === "name_font_size" || key === "stats_hours" || key === "card_scale" || key === "segment_gap" || key === "name_offset_x" || key === "name_offset_y" || key === "value_offset_x" || key === "value_offset_y" || key === "tap_confirm_open_window" || key === "fan_blade_count") {
       const raw = String(value ?? "").trim();
 
       // Allow typing negative/decimal values without the editor forcing "0" mid-input.
