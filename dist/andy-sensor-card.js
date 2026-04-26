@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.7
+ * Andy Sensor Card v1.0.7.1
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -17,7 +17,7 @@
 */
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.7";
+const CARD_VERSION = "1.0.7.1";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
 
 //console.info(CARD_TAGLINE);
@@ -641,9 +641,55 @@ this._gateAnimRaf = 0;
     this._ascPrevScrollOnScroll = null;
   }
 
-  getCardSize() {
+  _estimateMinCardHeightPx() {
     const scale = Math.max(0.75, Math.min(2.5, Number(this._config?.card_scale ?? 1) || 1));
-    return Math.max(3, Math.ceil(4 * scale));
+    const sym = String(this._config?.symbol || "battery_liquid").trim().toLowerCase();
+    const vp = String(this._config?.value_position || "top_right").trim().toLowerCase();
+    const splitHorizontal = (
+      (sym === "battery_splitted_segments" || sym === "battery_splitted_segments_modern")
+      && String(this._config?.orientation || "vertical").trim().toLowerCase() === "horizontal"
+    );
+
+    let px = 236 * scale;
+    if (vp.startsWith("bottom")) px += 18 * scale;
+    if (splitHorizontal) px += 14 * scale;
+    if (this._config?.show_stats) px += 10 * scale;
+
+    const explicitHeight = String(this._config?.card_height || "").trim().match(/^(\d+(?:\.\d+)?)px$/i);
+    if (explicitHeight) {
+      const explicitPx = Number(explicitHeight[1]);
+      if (Number.isFinite(explicitPx) && explicitPx > 0) px = Math.max(px, explicitPx);
+    }
+
+    return Math.max(210, Math.ceil(px));
+  }
+
+  _estimateCardRows() {
+    return Math.max(4, Math.ceil(this._estimateMinCardHeightPx() / 56));
+  }
+
+  getCardSize() {
+    return this._estimateCardRows();
+  }
+
+  getGridOptions() {
+    const rows = this._estimateCardRows();
+    return {
+      columns: 6,
+      rows,
+      min_rows: rows,
+      min_columns: 4,
+    };
+  }
+
+  getLayoutOptions() {
+    const gridRows = Math.max(3, this._estimateCardRows() - 1);
+    return {
+      grid_columns: 2,
+      grid_rows: gridRows,
+      grid_min_rows: gridRows,
+      grid_min_columns: 2,
+    };
   }
 
   connectedCallback() {
@@ -3339,7 +3385,8 @@ _drawScaleDom() {
     const statsPadPx = (showStats && statsPos.startsWith("bottom") && tallSyms.has(baseSym)) ? 0 : 10;
     const cw = toCssSize(this._config.card_width);
     const ch = toCssSize(this._config.card_height);
-    const wrapStyle = `${scaleVarStyle}--asc-stats-pad:${statsPadPx}px;${ch ? `--asc-card-height:${ch};` : ""}`;
+    const minCardHeightPx = this._estimateMinCardHeightPx();
+    const wrapStyle = `${scaleVarStyle}--asc-stats-pad:${statsPadPx}px;--asc-min-card-height:${minCardHeightPx}px;${ch ? `--asc-card-height:${ch};` : ""}`;
 
     const isImageSymbol = (baseSym === "image");
     const previewWrapStyle = (isPreview && isImageSymbol)
@@ -7793,10 +7840,17 @@ _waterLevelSegmentsSvg(opts) {
   static get styles() {
     return css`
       :host { display:block; isolation:isolate; }
-      ha-card { border-radius: 18px; overflow: hidden; position: relative; isolation:isolate; }
+      ha-card { display:block; border-radius: 18px; overflow: hidden; position: relative; isolation:isolate; }
       :host([data-asc-preview="1"]) ha-card { height: 100% !important; max-height: 100% !important; overflow: auto !important; }
 
-      .wrap { position: relative; padding: calc(16px * var(--asc-scale, 1)); height: 100%; box-sizing: border-box; isolation:isolate; }
+      .wrap {
+        position: relative;
+        padding: calc(16px * var(--asc-scale, 1));
+        height: var(--asc-card-height, auto);
+        min-height: var(--asc-min-card-height, 236px);
+        box-sizing: border-box;
+        isolation:isolate;
+      }
       :host([data-asc-preview="1"]) .wrap { height: var(--asc-card-height, 100%); }
 
       .header { display:flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: calc(10px * var(--asc-scale, 1) * var(--asc-gap-mult, 1)); }
