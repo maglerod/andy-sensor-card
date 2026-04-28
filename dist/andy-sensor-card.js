@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.7.1
+ * Andy Sensor Card v1.0.7.2
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -17,7 +17,7 @@
 */
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.7.1";
+const CARD_VERSION = "1.0.7.2";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
 
 //console.info(CARD_TAGLINE);
@@ -8845,6 +8845,11 @@ incomingRaw.symbol =
     const isEditing = !!this._isEditing;
 
     // Keep entity pickers connected to hass, but skip full sync while typing.
+    try {
+      this.querySelectorAll("ha-selector").forEach((el) => {
+        el.hass = this._hass;
+      });
+    } catch (_) {}
     if (this._elEntity) this._elEntity.hass = this._hass;
     if (this._elEntity2) this._elEntity2.hass = this._hass;
     if (this._elImageMediaPicker) this._elImageMediaPicker.hass = this._hass;
@@ -8984,47 +8989,101 @@ const stopBubble = (e) => {
       return { wrap: ff, sw };
     };
 
-    const mkSelect = (label, key, options) => {
-      const sel = document.createElement("ha-select");
-      sel.label = label;
-      sel.configValue = key;
-
-      options.forEach(([value, text]) => {
-        const item = document.createElement("mwc-list-item");
-        item.value = value;
-        item.innerText = text;
-        sel.appendChild(item);
+    const normalizeSelectOptions = (options) =>
+      (options || []).map((opt) => {
+        if (Array.isArray(opt)) return { value: String(opt[0] ?? ""), label: String(opt[1] ?? opt[0] ?? "") };
+        return { value: String(opt?.value ?? ""), label: String(opt?.label ?? opt?.value ?? "") };
       });
+
+    const readSelectValue = (ev, control) =>
+      (ev && ev.detail && typeof ev.detail.value !== "undefined")
+        ? ev.detail.value
+        : (ev?.target?.value ?? control?.value);
+
+    const setSelectControlValue = (control, value) => {
+      if (!control) return;
+      control.value = value;
+      try { control.requestUpdate?.(); } catch (_) {}
+    };
+
+    const setSelectControlOptions = (control, options, value = "") => {
+      if (!control) return;
+      const normalized = normalizeSelectOptions(options);
+      const tag = control.tagName.toLowerCase();
+
+      if (tag === "ha-selector") {
+        control.selector = { select: { mode: "dropdown", options: normalized } };
+        control.hass = this._hass;
+        setSelectControlValue(control, value);
+        return;
+      }
+
+      if (tag === "ha-combo-box") {
+        control.items = normalized;
+        control.itemLabelPath = "label";
+        control.itemValuePath = "value";
+        setSelectControlValue(control, value);
+        return;
+      }
+
+      while (control.firstChild) control.removeChild(control.firstChild);
+      normalized.forEach(({ value: optValue, label: optLabel }) => {
+        const item = document.createElement("option");
+        item.value = optValue;
+        item.textContent = optLabel;
+        control.appendChild(item);
+      });
+      setSelectControlValue(control, value);
+    };
+
+    const mkSelectControl = ({
+      label,
+      key = "",
+      options = [],
+      value = "",
+      onChange = null,
+    }) => {
+      const hasSelector = !!customElements.get("ha-selector");
+      const hasComboBox = !!customElements.get("ha-combo-box");
+      const sel = hasSelector
+        ? document.createElement("ha-selector")
+        : hasComboBox
+          ? document.createElement("ha-combo-box")
+          : document.createElement("select");
+
+      sel.label = label;
+      if (key) sel.configValue = key;
+      sel.style.display = "block";
+      sel.style.width = "100%";
+      if (sel.tagName.toLowerCase() === "ha-selector") {
+        sel.hass = this._hass;
+      }
+
+      setSelectControlOptions(sel, options, value);
+
+      const handleChange = (e) => {
+        stopBubble(e);
+        if (onChange) onChange(readSelectValue(e, sel), e, sel);
+        else this._onChange(e);
+      };
 
       sel.addEventListener("click", stopBubble);
-      sel.addEventListener("opened", (e) => {
-        stopBubble(e);
-        if (key === "symbol") {
-          // Ensure the menu opens from the top so all options are easy to find.
-          setTimeout(() => {
-            try {
-              const menu = sel.shadowRoot?.querySelector("mwc-menu") || sel.shadowRoot?.querySelector("ha-menu");
-              const list = menu?.shadowRoot?.querySelector(".mdc-list") || menu?.shadowRoot?.querySelector("mwc-list") || menu?.querySelector("mwc-list") || menu;
-              if (list && typeof list.scrollTop === "number") list.scrollTop = 0;
-            } catch (_) {}
-          }, 0);
-        }
-      });
-      sel.addEventListener("closed", stopBubble);
       sel.addEventListener("keydown", stopBubble);
-
-      sel.addEventListener("value-changed", (e) => {
-        e.stopPropagation();
-        this._onChange(e);
-      });
-
-      sel.addEventListener("selected", (e) => {
-        e.stopPropagation();
-        if (sel.value) this._commit(key, sel.value);
-      });
+      sel.addEventListener("value-changed", handleChange);
+      if (sel.tagName.toLowerCase() === "select") {
+        sel.addEventListener("change", handleChange);
+      }
 
       return sel;
     };
+
+    const mkSelect = (label, key, options) =>
+      mkSelectControl({
+        label,
+        key,
+        options,
+        value: (this._config || {})[key] ?? "",
+      });
 
     const mkEntityControl = (label, configValue) => {
       // Prefer HA's selector (works across HA versions). Fallback to ha-entity-picker.
@@ -9144,38 +9203,22 @@ const stopBubble = (e) => {
     ffPickMain.appendChild(swPickMain);
     svcRowMain.appendChild(ffPickMain);
 
-    const svcPickerMain = document.createElement(customElements.get("ha-combo-box") ? "ha-combo-box" : "ha-select");
-    svcPickerMain.label = "Available services";
-    svcPickerMain.style.width = "100%";
-    svcPickerMain.addEventListener("click", stopBubble);
+    const svcPickerMain = mkSelectControl({
+      label: "Available services",
+      options: [],
+      value: this._config?.tap_action_service || "",
+      onChange: (value) => {
+        const v = String(value || "");
+        this._commit("tap_action_service", v);
+        if (tfSvcMain) tfSvcMain.value = v;
+      },
+    });
 
     const fillSvcPickerMain = () => {
       const items = _buildSvcItemsMain(this._config?.entity);
-      const tag = svcPickerMain.tagName.toLowerCase();
-      if (tag === "ha-combo-box") {
-        svcPickerMain.items = items;
-        svcPickerMain.itemLabelPath = "label";
-        svcPickerMain.itemValuePath = "value";
-        svcPickerMain.value = this._config?.tap_action_service || "";
-      } else {
-        while (svcPickerMain.firstChild) svcPickerMain.removeChild(svcPickerMain.firstChild);
-        items.forEach(({ value, label }) => {
-          const it = document.createElement("mwc-list-item");
-          it.value = value;
-          it.innerText = label;
-          svcPickerMain.appendChild(it);
-        });
-        svcPickerMain.value = this._config?.tap_action_service || "";
-      }
+      setSelectControlOptions(svcPickerMain, items, this._config?.tap_action_service || "");
     };
     fillSvcPickerMain();
-
-    svcPickerMain.addEventListener("value-changed", (e) => {
-      e.stopPropagation();
-      const v = (e.detail && (e.detail.value ?? e.detail)) ?? e.target?.value ?? svcPickerMain.value;
-      this._commit("tap_action_service", String(v || ""));
-      if (tfSvcMain) tfSvcMain.value = String(v || "");
-    });
     svcRowMain.appendChild(svcPickerMain);
     this._rowMainSvc.appendChild(svcRowMain);
 
@@ -9185,7 +9228,7 @@ const stopBubble = (e) => {
     tfSvcMain.addEventListener("input", (e) => {
       e.stopPropagation();
       this._commit("tap_action_service", tfSvcMain.value);
-      try { svcPickerMain.value = tfSvcMain.value; } catch(e) {}
+      try { setSelectControlValue(svcPickerMain, tfSvcMain.value); } catch(e) {}
     });
     tfSvcMain.addEventListener("click", stopBubble);
     this._rowMainSvc.appendChild(tfSvcMain);
@@ -9842,7 +9885,7 @@ varsHead.innerHTML = `
     style.textContent = `
       .form { display:flex; flex-direction:column; gap:12px; padding:8px 0; overflow: visible; }
       .note{ font-size: 12px; line-height: 1.35; opacity: 0.9; padding: 8px 10px; border-radius: 10px; background: rgba(0,0,0,0.05); border: 1px solid rgba(0,0,0,0.10);} 
-      ha-entity-picker, ha-select, ha-textfield { display:block; width:100%; }
+      ha-entity-picker, ha-selector, ha-combo-box, ha-textfield, select { display:block; width:100%; }
       ha-entity-picker { min-height: 56px; }
 
       .grid1 { display:grid; grid-template-columns: 1fr; gap:12px; }
@@ -11866,35 +11909,16 @@ imgSec.appendChild(rowUrl);
 const rowFit = document.createElement("div");
     rowFit.className = "draftGrid2";
 
-    const cbFit = document.createElement(customElements.get("ha-combo-box") ? "ha-combo-box" : "ha-select");
-    cbFit.label = "Image fit";
     const fitItems = [{ value: "cover", label: "Cover" }, { value: "contain", label: "Contain" }];
-    if (cbFit.tagName.toLowerCase() === "ha-combo-box") {
-      cbFit.items = fitItems;
-      cbFit.itemLabelPath = "label";
-      cbFit.itemValuePath = "value";
-      cbFit.value = this._badgeDraft.img_fit || "cover";
-      cbFit.addEventListener("value-changed", (e) => {
-        e.stopPropagation();
-        const v = (e.detail && (e.detail.value ?? e.detail)) ?? e.target?.value ?? cbFit.value;
-        this._badgeDraft.img_fit = String(v || "cover");
+    const cbFit = mkSelectControl({
+      label: "Image fit",
+      options: fitItems,
+      value: this._badgeDraft.img_fit || "cover",
+      onChange: (value) => {
+        this._badgeDraft.img_fit = String(value || "cover");
         this._applyBadgeDraftPreview();
-      });
-    } else {
-      fitItems.forEach(({value,label}) => {
-        const it = document.createElement("mwc-list-item");
-        it.value = value;
-        it.innerText = label;
-        cbFit.appendChild(it);
-      });
-      cbFit.value = this._badgeDraft.img_fit || "cover";
-      cbFit.addEventListener("value-changed", (e) => {
-        e.stopPropagation();
-        const v = (e.detail && (e.detail.value ?? e.detail)) ?? e.target?.value ?? cbFit.value;
-        this._badgeDraft.img_fit = String(v || "cover");
-        this._applyBadgeDraftPreview();
-      });
-    }
+      },
+    });
     rowFit.appendChild(cbFit);
 
     imgSec.appendChild(rowFit);
@@ -12076,10 +12100,7 @@ const rowFit = document.createElement("div");
 const grid2 = document.createElement("div");
 grid2.className = "draftGrid1";
 
-const cbStyle = document.createElement(customElements.get("ha-combo-box") ? "ha-combo-box" : "ha-select");
-cbStyle.label = "Badge style";
-if (cbStyle.tagName.toLowerCase() === "ha-combo-box") {
-  cbStyle.items = [
+const badgeStyleItems = [
     { value: "glass", label: "Glass" },
     { value: "solid", label: "Solid" },
     { value: "outline", label: "Outline" },
@@ -12093,45 +12114,38 @@ if (cbStyle.tagName.toLowerCase() === "ha-combo-box") {
     { value: "fan", label: "Fan (symbol)" },
     { value: "heatpump", label: "Heatpump (symbol)" },
   ];
-  cbStyle.itemLabelPath = "label";
-  cbStyle.itemValuePath = "value";
-  cbStyle.value = this._badgeDraft.style || "glass";
-  cbStyle.addEventListener("value-changed", (e) => { e.stopPropagation(); const v = (e.detail && (e.detail.value ?? e.detail)) ?? e.target?.value ?? cbStyle.value; this._badgeDraft.style = String(v || "glass"); this._applyBadgeDraftPreview(); updateAnimVisibility(); });
-} else {
-  [["glass","Glass"],["solid","Solid"],["outline","Outline"],["none","None"],["left_arrow","Left arrow"],["right_arrow","Right arrow"],["top_arrow","Top arrow"],["bottom_arrow","Bottom arrow"],["recycle_left","Recycle arrow left"],["recycle_right","Recycle arrow right"],["fan","Fan (symbol)"],["heatpump","Heatpump (symbol)"]].forEach(([v,t]) => {
-    const it = document.createElement("mwc-list-item");
-    it.value = v;
-    it.innerText = t;
-    cbStyle.appendChild(it);
-  });
-  cbStyle.value = this._badgeDraft.style || "glass";
-  cbStyle.addEventListener("value-changed", (e) => { e.stopPropagation(); const v = (e.detail && (e.detail.value ?? e.detail)) ?? e.target?.value ?? cbStyle.value; this._badgeDraft.style = String(v || "glass"); this._applyBadgeDraftPreview(); updateAnimVisibility(); });
-}
+const cbStyle = mkSelectControl({
+  label: "Badge style",
+  options: badgeStyleItems,
+  value: this._badgeDraft.style || "glass",
+  onChange: (value) => {
+    this._badgeDraft.style = String(value || "glass");
+    this._applyBadgeDraftPreview();
+    updateAnimVisibility();
+  },
+});
 grid2.appendChild(cbStyle);
 
 
-const cbAct = document.createElement(customElements.get("ha-combo-box") ? "ha-combo-box" : "ha-select");
-cbAct.label = "Tap action";
 const actItems = [
   { value: "more-info", label: "More info" },
   { value: "toggle", label: "Toggle" },
   { value: "call-service", label: "Call service" },
   { value: "none", label: "None" },
     ];
-if (cbAct.tagName.toLowerCase() === "ha-combo-box") {
-  cbAct.items = actItems;
-  cbAct.itemLabelPath = "label";
-  cbAct.itemValuePath = "value";
-  cbAct.value = this._badgeDraft.tap_action?.action || "more-info";
-} else {
-  actItems.forEach(({value,label}) => {
-    const it = document.createElement("mwc-list-item");
-    it.value = value;
-    it.innerText = label;
-    cbAct.appendChild(it);
-  });
-  cbAct.value = this._badgeDraft.tap_action?.action || "more-info";
-}
+const cbAct = mkSelectControl({
+  label: "Tap action",
+  options: actItems,
+  value: this._badgeDraft.tap_action?.action || "more-info",
+  onChange: (value, _event, control) => {
+    const v = String(value || "more-info");
+    setSelectControlValue(control, v);
+    this._badgeDraft.tap_action = this._badgeDraft.tap_action || {};
+    this._badgeDraft.tap_action.action = v;
+    updateSvcVisibility();
+    this._applyBadgeDraftPreview();
+  },
+});
 grid2.appendChild(cbAct);
 
 
@@ -12198,72 +12212,34 @@ sliderBox.innerHTML = `<div class="sectionTitle">Slider settings</div>`;
 const sRow1 = document.createElement("div");
 sRow1.className = "draftGrid2";
 
-const cbOrient = document.createElement(customElements.get("ha-combo-box") ? "ha-combo-box" : "ha-select");
-cbOrient.label = "Orientation";
 const orientItems = [
   { value: "horizontal", label: "Horizontal" },
   { value: "vertical", label: "Vertical" },
 ];
-if (cbOrient.tagName.toLowerCase() === "ha-combo-box") {
-  cbOrient.items = orientItems;
-  cbOrient.itemLabelPath = "label";
-  cbOrient.itemValuePath = "value";
-  cbOrient.value = this._badgeDraft.slider_orientation || "horizontal";
-  cbOrient.addEventListener("value-changed", (e) => {
-    e.stopPropagation();
-    const v = (e.detail && (e.detail.value ?? e.detail)) ?? e.target?.value ?? cbOrient.value;
-    this._badgeDraft.slider_orientation = String(v || "horizontal");
+const cbOrient = mkSelectControl({
+  label: "Orientation",
+  options: orientItems,
+  value: this._badgeDraft.slider_orientation || "horizontal",
+  onChange: (value) => {
+    this._badgeDraft.slider_orientation = String(value || "horizontal");
     this._applyBadgeDraftPreview();
-  });
-} else {
-  orientItems.forEach(({value,label}) => {
-    const it = document.createElement("mwc-list-item");
-    it.value = value;
-    it.innerText = label;
-    cbOrient.appendChild(it);
-  });
-  cbOrient.value = this._badgeDraft.slider_orientation || "horizontal";
-  cbOrient.addEventListener("value-changed", (e) => {
-    e.stopPropagation();
-    const v = (e.detail && (e.detail.value ?? e.detail)) ?? e.target?.value ?? cbOrient.value;
-    this._badgeDraft.slider_orientation = String(v || "horizontal");
-    this._applyBadgeDraftPreview();
-  });
-}
+  },
+});
 sRow1.appendChild(cbOrient);
 
-const cbUpd = document.createElement(customElements.get("ha-combo-box") ? "ha-combo-box" : "ha-select");
-cbUpd.label = "Update mode";
 const updItems = [
   { value: "release", label: "On release" },
   { value: "live", label: "Live (while dragging)" },
 ];
-if (cbUpd.tagName.toLowerCase() === "ha-combo-box") {
-  cbUpd.items = updItems;
-  cbUpd.itemLabelPath = "label";
-  cbUpd.itemValuePath = "value";
-  cbUpd.value = this._badgeDraft.slider_update || "release";
-  cbUpd.addEventListener("value-changed", (e) => {
-    e.stopPropagation();
-    const v = (e.detail && (e.detail.value ?? e.detail)) ?? e.target?.value ?? cbUpd.value;
-    this._badgeDraft.slider_update = String(v || "release");
+const cbUpd = mkSelectControl({
+  label: "Update mode",
+  options: updItems,
+  value: this._badgeDraft.slider_update || "release",
+  onChange: (value) => {
+    this._badgeDraft.slider_update = String(value || "release");
     this._applyBadgeDraftPreview();
-  });
-} else {
-  updItems.forEach(({value,label}) => {
-    const it = document.createElement("mwc-list-item");
-    it.value = value;
-    it.innerText = label;
-    cbUpd.appendChild(it);
-  });
-  cbUpd.value = this._badgeDraft.slider_update || "release";
-  cbUpd.addEventListener("value-changed", (e) => {
-    e.stopPropagation();
-    const v = (e.detail && (e.detail.value ?? e.detail)) ?? e.target?.value ?? cbUpd.value;
-    this._badgeDraft.slider_update = String(v || "release");
-    this._applyBadgeDraftPreview();
-  });
-}
+  },
+});
 sRow1.appendChild(cbUpd);
 
 sliderBox.appendChild(sRow1);
@@ -12476,41 +12452,23 @@ swPick.addEventListener("change", (e) => {
 ffPick.appendChild(swPick);
 svcRow.appendChild(ffPick);
 
-const svcPicker = document.createElement(customElements.get("ha-combo-box") ? "ha-combo-box" : "ha-select");
-svcPicker.label = "Available services";
-svcPicker.style.width = "100%";
-svcPicker.addEventListener("click", stopBubble);
+const svcPicker = mkSelectControl({
+  label: "Available services",
+  options: [],
+  value: this._badgeDraft.tap_action?.service || "",
+  onChange: (value) => {
+    this._badgeDraft.tap_action = this._badgeDraft.tap_action || {};
+    this._badgeDraft.tap_action.service = String(value || "");
+    if (tfSvc) tfSvc.value = this._badgeDraft.tap_action.service || "";
+    this._applyBadgeDraftPreview();
+  },
+});
 
 const _fillSvcPicker = () => {
   const items = _buildSvcItems(this._badgeDraft.entity);
-  const tag = svcPicker.tagName.toLowerCase();
-  if (tag === "ha-combo-box") {
-    svcPicker.items = items;
-    svcPicker.itemLabelPath = "label";
-    svcPicker.itemValuePath = "value";
-    svcPicker.value = this._badgeDraft.tap_action?.service || "";
-  } else {
-    while (svcPicker.firstChild) svcPicker.removeChild(svcPicker.firstChild);
-    items.forEach(({ value, label }) => {
-      const it = document.createElement("mwc-list-item");
-      it.value = value;
-      it.innerText = label;
-      svcPicker.appendChild(it);
-    });
-    svcPicker.value = this._badgeDraft.tap_action?.service || "";
-  }
+  setSelectControlOptions(svcPicker, items, this._badgeDraft.tap_action?.service || "");
 };
 _fillSvcPicker();
-
-svcPicker.addEventListener("value-changed", (e) => {
-  e.stopPropagation();
-  const v = (e.detail && (e.detail.value ?? e.detail)) ?? e.target?.value ?? svcPicker.value;
-  this._badgeDraft.tap_action = this._badgeDraft.tap_action || {};
-  this._badgeDraft.tap_action.service = String(v || "");
-  // Keep manual field in sync
-  if (tfSvc) tfSvc.value = this._badgeDraft.tap_action.service || "";
-  this._applyBadgeDraftPreview();
-});
 svcRow.appendChild(svcPicker);
 svcBox.appendChild(svcRow);
 
@@ -12523,7 +12481,7 @@ tfSvc.addEventListener("input", (e) => {
   this._badgeDraft.tap_action = this._badgeDraft.tap_action || {};
   this._badgeDraft.tap_action.service = tfSvc.value;
   // Keep picker in sync
-  try { svcPicker.value = tfSvc.value; } catch(e) {}
+  try { setSelectControlValue(svcPicker, tfSvc.value); } catch(e) {}
   this._applyBadgeDraftPreview();
 });
 tfSvc.addEventListener("click", stopBubble);
@@ -12564,16 +12522,6 @@ const updateSvcVisibility = () => {
   svcBox.style.display = (a === "call-service") ? "block" : "none";
   if (a === "call-service") updateSvcPickerVisibility();
 };
-
-cbAct.addEventListener("value-changed", (e) => {
-  e.stopPropagation();
-  const v = (e.detail && (e.detail.value ?? e.detail)) ?? e.target?.value ?? cbAct.value;
-  if (v != null) cbAct.value = v;
-  this._badgeDraft.tap_action = this._badgeDraft.tap_action || {};
-  this._badgeDraft.tap_action.action = String(v || "more-info");
-  updateSvcVisibility();
-  this._applyBadgeDraftPreview();
-});
 
 updateSvcVisibility();
 box.appendChild(svcBox);
