@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.8
+ * Andy Sensor Card v1.0.8.1
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -17,7 +17,7 @@
 */
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.8";
+const CARD_VERSION = "1.0.8.1";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
 
 //console.info(CARD_TAGLINE);
@@ -965,6 +965,8 @@ this._gateAnimRaf = 0;
       wind_gauge_speed_label: "Wind",
       wind_gauge_max_label: "Max",
       wind_gauge_value_color: "#ffffff",
+      wind_gauge_value_outline: true,
+      wind_gauge_value_outline_color: "#000000",
       wind_gauge_min: 0,
       wind_gauge_max: 30,
       wind_gauge_decimals: 1,
@@ -1003,6 +1005,12 @@ this._gateAnimRaf = 0;
       sunflow_arc_width: 2.5,
       sunflow_font_scale: 100,
       sunflow_value_color: "#ffffff",
+      sunflow_sunrise_color: "#ffffff",
+      sunflow_sunset_color: "#ffffff",
+      sunflow_remaining_color: "#ffffff",
+      sunflow_remaining_outline: true,
+      sunflow_remaining_outline_color: "#000000",
+      sunflow_secondary_color: "#ffffff",
       fan_show_frame: false, // Fan only
 
       fan_blade_count: 3, // Fan + Heatpump only (integer)
@@ -1159,6 +1167,8 @@ const rawSym = String(this._config.symbol || "battery_liquid");
     this._config.wind_gauge_speed_label = String(this._config.wind_gauge_speed_label ?? "Wind").trim();
     this._config.wind_gauge_max_label = String(this._config.wind_gauge_max_label ?? "Max").trim();
     this._config.wind_gauge_value_color = normalizeHex(this._config.wind_gauge_value_color, "#ffffff");
+    this._config.wind_gauge_value_outline = this._config.wind_gauge_value_outline !== false;
+    this._config.wind_gauge_value_outline_color = normalizeHex(this._config.wind_gauge_value_outline_color, "#000000");
     [
       "sunflow_sun_entity",
       "sunflow_sunrise_entity",
@@ -1195,6 +1205,12 @@ const rawSym = String(this._config.symbol || "battery_liquid");
       this._config[key] = String(this._config[key] ?? fallback);
     });
     this._config.sunflow_value_color = normalizeHex(this._config.sunflow_value_color, "#ffffff");
+    this._config.sunflow_sunrise_color = normalizeHex(this._config.sunflow_sunrise_color, "#ffffff");
+    this._config.sunflow_sunset_color = normalizeHex(this._config.sunflow_sunset_color, "#ffffff");
+    this._config.sunflow_remaining_color = normalizeHex(this._config.sunflow_remaining_color, "#ffffff");
+    this._config.sunflow_remaining_outline = this._config.sunflow_remaining_outline !== false;
+    this._config.sunflow_remaining_outline_color = normalizeHex(this._config.sunflow_remaining_outline_color, "#000000");
+    this._config.sunflow_secondary_color = normalizeHex(this._config.sunflow_secondary_color, "#ffffff");
     {
       const degreeFs = Number(this._config.wind_degree_font_size ?? 0);
       this._config.wind_degree_font_size = (Number.isFinite(degreeFs) && degreeFs >= 0) ? degreeFs : 0;
@@ -4378,6 +4394,12 @@ const root = this.renderRoot;
     const gradientFrom = normalizeHex(interval.gradient?.from, activeColor);
     const gradientTo = normalizeHex(interval.gradient?.to, gradientFrom);
     const valueColor = normalizeHex(this._config?.sunflow_value_color, "#ffffff");
+    const sunriseColor = normalizeHex(this._config?.sunflow_sunrise_color, "#ffffff");
+    const sunsetColor = normalizeHex(this._config?.sunflow_sunset_color, "#ffffff");
+    const remainingColor = normalizeHex(this._config?.sunflow_remaining_color, "#ffffff");
+    const remainingOutline = this._config?.sunflow_remaining_outline !== false;
+    const remainingOutlineColor = normalizeHex(this._config?.sunflow_remaining_outline_color, "#000000");
+    const secondaryColor = normalizeHex(this._config?.sunflow_secondary_color, "#ffffff");
 
     const sunSize = clamp(Number(this._config?.sunflow_sun_size ?? 14), 7, 26);
     const leftX = 30;
@@ -4484,8 +4506,8 @@ const root = this.renderRoot;
       <svg class="sensor-svg sun-flow-svg" viewBox="0 0 340 230" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Sun flow">
         <defs>
           <linearGradient id="${arcGradientId}" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stop-color="${gradientFrom}"></stop>
-            <stop offset="100%" stop-color="${gradientEnabled ? gradientTo : gradientFrom}"></stop>
+            <stop offset="0%" stop-color="${gradientEnabled ? gradientFrom : activeColor}"></stop>
+            <stop offset="100%" stop-color="${gradientEnabled ? gradientTo : activeColor}"></stop>
           </linearGradient>
           <radialGradient id="${sunGradientId}" cx="42%" cy="35%" r="70%">
             <stop offset="0%" stop-color="${gradientEnabled ? gradientTo : activeColor}"></stop>
@@ -4533,31 +4555,31 @@ const root = this.renderRoot;
             <circle cx="${sunX.toFixed(2)}" cy="${sunY.toFixed(2)}" r="${sunSize}" fill="url(#${sunHighlightId})" stroke="none"></circle>
           </g>
 
-          <g class="sun-flow-remaining" style="display:${this._config?.sunflow_show_remaining !== false ? "inline" : "none"}" fill="${activeColor}" stroke="${activeColor}">
+          <g class="sun-flow-remaining" style="display:${this._config?.sunflow_show_remaining !== false ? "inline" : "none"}" fill="${remainingColor}" stroke="${remainingColor}">
             <circle cx="${remainingDotX.toFixed(2)}" cy="${remainingY.toFixed(2)}" r="2.1" stroke="none"></circle>
             <line x1="${remainingLineStartX.toFixed(2)}" y1="${remainingY.toFixed(2)}" x2="${remainingLineEndX.toFixed(2)}" y2="${remainingY.toFixed(2)}" stroke-width="1" stroke-opacity="0.78"></line>
-            <text x="${remainingTextX.toFixed(2)}" y="${(remainingY + 3.1).toFixed(2)}" fill="${activeColor}" stroke="rgba(0,0,0,0.72)" stroke-width="2.2" paint-order="stroke fill" font-size="${remainingFontSize.toFixed(2)}" font-weight="600" text-anchor="${remainingAnchor}">${remainingText}</text>
+            <text x="${remainingTextX.toFixed(2)}" y="${(remainingY + 3.1).toFixed(2)}" fill="${remainingColor}" stroke="${remainingOutline ? remainingOutlineColor : "none"}" stroke-width="${remainingOutline ? 1.4 : 0}" paint-order="stroke fill" font-size="${remainingFontSize.toFixed(2)}" font-weight="600" text-anchor="${remainingAnchor}">${remainingText}</text>
           </g>
 
           <g class="sun-flow-times" text-anchor="middle">
             <g style="display:${this._config?.sunflow_show_sunrise !== false ? "inline" : "none"}">
-              <text x="48" y="153" fill="${activeColor}" font-size="${(22 * fontScale).toFixed(2)}" font-weight="650">${sunriseText}</text>
-              <text x="48" y="169" fill="${scaleColor}" font-size="${(8.6 * fontScale).toFixed(2)}" font-weight="500">${String(this._config?.sunflow_sunrise_label ?? "Sunrise")}</text>
+              <text x="48" y="153" fill="${sunriseColor}" font-size="${(22 * fontScale).toFixed(2)}" font-weight="650">${sunriseText}</text>
+              <text x="48" y="169" fill="${sunriseColor}" font-size="${(8.6 * fontScale).toFixed(2)}" font-weight="500">${String(this._config?.sunflow_sunrise_label ?? "Sunrise")}</text>
             </g>
             <g style="display:${this._config?.sunflow_show_sunset !== false ? "inline" : "none"}">
-              <text x="292" y="153" fill="${activeColor}" font-size="${(22 * fontScale).toFixed(2)}" font-weight="650">${sunsetText}</text>
-              <text x="292" y="169" fill="${scaleColor}" font-size="${(8.6 * fontScale).toFixed(2)}" font-weight="500">${String(this._config?.sunflow_sunset_label ?? "Sunset")}</text>
+              <text x="292" y="153" fill="${sunsetColor}" font-size="${(22 * fontScale).toFixed(2)}" font-weight="650">${sunsetText}</text>
+              <text x="292" y="169" fill="${sunsetColor}" font-size="${(8.6 * fontScale).toFixed(2)}" font-weight="500">${String(this._config?.sunflow_sunset_label ?? "Sunset")}</text>
             </g>
             <g style="display:${this._config?.sunflow_show_daylight !== false ? "inline" : "none"}">
-              <text x="170" y="143" fill="${scaleColor}" font-size="${(9.4 * fontScale).toFixed(2)}" font-weight="500">${String(this._config?.sunflow_daylight_label ?? "Daylight")}</text>
-              <text x="170" y="169" fill="${valueColor}" font-weight="600">
-                <tspan font-size="${(25 * fontScale).toFixed(2)}">${daylightParts.hours}</tspan>
-                <tspan font-size="${(9.5 * fontScale).toFixed(2)}"> ${hourLabel} </tspan>
-                <tspan font-size="${(25 * fontScale).toFixed(2)}">${String(daylightParts.minutes).padStart(2, "0")}</tspan>
-                <tspan font-size="${(9.5 * fontScale).toFixed(2)}"> ${minuteLabel}</tspan>
+              <text x="170" y="153" fill="${valueColor}" font-weight="650">
+                <tspan font-size="${(22 * fontScale).toFixed(2)}">${daylightParts.hours}</tspan>
+                <tspan font-size="${(8.6 * fontScale).toFixed(2)}"> ${hourLabel} </tspan>
+                <tspan font-size="${(22 * fontScale).toFixed(2)}">${String(daylightParts.minutes).padStart(2, "0")}</tspan>
+                <tspan font-size="${(8.6 * fontScale).toFixed(2)}"> ${minuteLabel}</tspan>
               </text>
+              <text x="170" y="169" fill="${valueColor}" font-size="${(8.6 * fontScale).toFixed(2)}" font-weight="500">${String(this._config?.sunflow_daylight_label ?? "Daylight")}</text>
             </g>
-            <text x="170" y="203" fill="${scaleColor}" font-size="${(8.8 * fontScale).toFixed(2)}" font-weight="500">${secondaryText}</text>
+            <text x="170" y="203" fill="${secondaryColor}" font-size="${(8.8 * fontScale).toFixed(2)}" font-weight="500">${secondaryText}</text>
           </g>
         </g>
 
@@ -4616,6 +4638,8 @@ const root = this.renderRoot;
     const gaugeSpeedLabel = String(this._config?.wind_gauge_speed_label ?? "Wind").trim();
     const gaugeMaxLabel = String(this._config?.wind_gauge_max_label ?? "Max").trim();
     const gaugeValueColor = normalizeHex(this._config?.wind_gauge_value_color, "#ffffff");
+    const gaugeValueOutline = this._config?.wind_gauge_value_outline !== false;
+    const gaugeValueOutlineColor = normalizeHex(this._config?.wind_gauge_value_outline_color, "#000000");
     const gaugeSpeedValueRaw = gaugeEnabled && gaugeSpeedEntity ? this._getStateValue(gaugeSpeedEntity) : null;
     const gaugeMaxValueRaw = gaugeEnabled && gaugeMaxEntity ? this._getStateValue(gaugeMaxEntity) : null;
     const gaugeSpeedValue = (gaugeSpeedValueRaw == null) ? Number.NaN : Number(gaugeSpeedValueRaw);
@@ -4849,8 +4873,8 @@ const root = this.renderRoot;
           >
             <path d="${gaugeScaleTickPath}" fill="none" stroke-width="0.75" stroke-linecap="round"></path>
             <g
-              stroke="rgba(0,0,0,0.66)"
-              stroke-width="1.2"
+              stroke="${gaugeValueOutline ? gaugeValueOutlineColor : "none"}"
+              stroke-width="${gaugeValueOutline ? 1.0 : 0}"
               paint-order="stroke fill"
               font-size="${gaugeScaleFontSize}"
               font-weight="700"
@@ -4875,9 +4899,9 @@ const root = this.renderRoot;
               y="${gaugeSpeedTextY}"
               fill="${gaugeValueColor}"
               fill-opacity="${gaugeOpacity}"
-              stroke="rgba(0,0,0,0.62)"
-              stroke-width="1.8"
-              stroke-opacity="0.72"
+              stroke="${gaugeValueOutline ? gaugeValueOutlineColor : "none"}"
+              stroke-width="${gaugeValueOutline ? 1.4 : 0}"
+              stroke-opacity="${gaugeOpacity}"
               paint-order="stroke fill"
               style="display:${gaugeSpeedValid ? "inline" : "none"}"
             >${gaugeSpeedText}</text>
@@ -4887,9 +4911,9 @@ const root = this.renderRoot;
               y="${gaugeMaxTextY}"
               fill="${gaugeValueColor}"
               fill-opacity="${gaugeOpacity}"
-              stroke="rgba(0,0,0,0.62)"
-              stroke-width="1.8"
-              stroke-opacity="0.72"
+              stroke="${gaugeValueOutline ? gaugeValueOutlineColor : "none"}"
+              stroke-width="${gaugeValueOutline ? 1.4 : 0}"
+              stroke-opacity="${gaugeOpacity}"
               paint-order="stroke fill"
               style="display:${gaugeMaxValid ? "inline" : "none"}"
             >${gaugeMaxText}</text>
@@ -9857,6 +9881,8 @@ const DEFAULTS = {
   wind_gauge_speed_label: "Wind",
   wind_gauge_max_label: "Max",
   wind_gauge_value_color: "#ffffff",
+  wind_gauge_value_outline: true,
+  wind_gauge_value_outline_color: "#000000",
   wind_gauge_min: 0,
   wind_gauge_max: 30,
   wind_gauge_decimals: 1,
@@ -9895,6 +9921,12 @@ const DEFAULTS = {
   sunflow_arc_width: 2.5,
   sunflow_font_scale: 100,
   sunflow_value_color: "#ffffff",
+  sunflow_sunrise_color: "#ffffff",
+  sunflow_sunset_color: "#ffffff",
+  sunflow_remaining_color: "#ffffff",
+  sunflow_remaining_outline: true,
+  sunflow_remaining_outline_color: "#000000",
+  sunflow_secondary_color: "#ffffff",
   scale_color_mode: "per_interval",
   show_stats: false,
   stats_hours: 24,
@@ -9935,6 +9967,8 @@ class AndySensorCardEditor extends HTMLElement {
     incomingRaw.wind_gauge_speed_label = String(incomingRaw.wind_gauge_speed_label ?? "Wind").trim();
     incomingRaw.wind_gauge_max_label = String(incomingRaw.wind_gauge_max_label ?? "Max").trim();
     incomingRaw.wind_gauge_value_color = normalizeHex(incomingRaw.wind_gauge_value_color, "#ffffff");
+    incomingRaw.wind_gauge_value_outline = incomingRaw.wind_gauge_value_outline !== false;
+    incomingRaw.wind_gauge_value_outline_color = normalizeHex(incomingRaw.wind_gauge_value_outline_color, "#000000");
     [
       "sunflow_sun_entity",
       "sunflow_sunrise_entity",
@@ -9970,6 +10004,12 @@ class AndySensorCardEditor extends HTMLElement {
       incomingRaw[key] = String(incomingRaw[key] ?? fallback);
     });
     incomingRaw.sunflow_value_color = normalizeHex(incomingRaw.sunflow_value_color, "#ffffff");
+    incomingRaw.sunflow_sunrise_color = normalizeHex(incomingRaw.sunflow_sunrise_color, "#ffffff");
+    incomingRaw.sunflow_sunset_color = normalizeHex(incomingRaw.sunflow_sunset_color, "#ffffff");
+    incomingRaw.sunflow_remaining_color = normalizeHex(incomingRaw.sunflow_remaining_color, "#ffffff");
+    incomingRaw.sunflow_remaining_outline = incomingRaw.sunflow_remaining_outline !== false;
+    incomingRaw.sunflow_remaining_outline_color = normalizeHex(incomingRaw.sunflow_remaining_outline_color, "#000000");
+    incomingRaw.sunflow_secondary_color = normalizeHex(incomingRaw.sunflow_secondary_color, "#ffffff");
 
 
     incomingRaw.fan_blade_count = clampInt(incomingRaw.fan_blade_count ?? 3, 2, 8, 3);
@@ -10859,6 +10899,18 @@ const row2 = document.createElement("div");
     rowWindGaugeStyle.appendChild(this._elWindGaugeValueColorRow);
     root.appendChild(rowWindGaugeStyle);
 
+    const rowWindGaugeOutline = document.createElement("div");
+    rowWindGaugeOutline.className = "grid2";
+    const windGaugeValueOutlineSwitch = mkSwitch("Outline gauge values", "wind_gauge_value_outline");
+    this._swWindGaugeValueOutline = windGaugeValueOutlineSwitch.sw;
+    this._elWindGaugeValueOutlineColorRow = mkColorText("Gauge value outline color", "wind_gauge_value_outline_color", "#000000");
+    this._elWindGaugeValueOutlineColor = this._elWindGaugeValueOutlineColorRow.children[0];
+    this._elWindGaugeValueOutlineColorPicker = this._elWindGaugeValueOutlineColorRow.children[1];
+    this._rowWindGaugeOutline = rowWindGaugeOutline;
+    rowWindGaugeOutline.appendChild(windGaugeValueOutlineSwitch.wrap);
+    rowWindGaugeOutline.appendChild(this._elWindGaugeValueOutlineColorRow);
+    root.appendChild(rowWindGaugeOutline);
+
     const rowWindGaugeLabels = document.createElement("div");
     rowWindGaugeLabels.className = "grid2";
     this._elWindGaugeSpeedLabel = mkText("Current wind label", "wind_gauge_speed_label", "text", "Wind");
@@ -10942,7 +10994,7 @@ const row2 = document.createElement("div");
 
     const sunFlowNote = document.createElement("div");
     sunFlowNote.className = "note";
-    sunFlowNote.innerText = "Uses the main Entity by default (normally sun.sun). Optional entities below override individual values. Fill/gradient controls the sun and elapsed arc, Outline controls the horizon/future arc, and Scale controls secondary text/ticks.";
+    sunFlowNote.innerText = "Uses the main Entity by default (normally sun.sun). Optional entities below override individual values. Fill controls the sun and elapsed arc when gradient is disabled. Gradient from/to controls them only when gradient is enabled. Outline controls the horizon/future arc, while Scale controls the ticks. Dedicated colors below control the displayed times and information text.";
     root.appendChild(sunFlowNote);
 
     const rowSunFlowMainEntity = document.createElement("div");
@@ -11067,6 +11119,36 @@ const row2 = document.createElement("div");
     rowSunFlowTextStyle.appendChild(this._elSunFlowValueColorRow);
     root.appendChild(rowSunFlowTextStyle);
 
+    const rowSunFlowColors1 = document.createElement("div");
+    rowSunFlowColors1.className = "grid3";
+    this._elSunFlowSunriseColorRow = mkColorText("Sunrise text color", "sunflow_sunrise_color", "#ffffff");
+    this._elSunFlowSunriseColor = this._elSunFlowSunriseColorRow.children[0];
+    this._elSunFlowSunriseColorPicker = this._elSunFlowSunriseColorRow.children[1];
+    this._elSunFlowSunsetColorRow = mkColorText("Sunset text color", "sunflow_sunset_color", "#ffffff");
+    this._elSunFlowSunsetColor = this._elSunFlowSunsetColorRow.children[0];
+    this._elSunFlowSunsetColorPicker = this._elSunFlowSunsetColorRow.children[1];
+    this._elSunFlowRemainingColorRow = mkColorText("Remaining text color", "sunflow_remaining_color", "#ffffff");
+    this._elSunFlowRemainingColor = this._elSunFlowRemainingColorRow.children[0];
+    this._elSunFlowRemainingColorPicker = this._elSunFlowRemainingColorRow.children[1];
+    rowSunFlowColors1.appendChild(this._elSunFlowSunriseColorRow);
+    rowSunFlowColors1.appendChild(this._elSunFlowSunsetColorRow);
+    rowSunFlowColors1.appendChild(this._elSunFlowRemainingColorRow);
+    root.appendChild(rowSunFlowColors1);
+
+    const rowSunFlowColors2 = document.createElement("div");
+    rowSunFlowColors2.className = "grid3";
+    const sunFlowRemainingOutlineSwitch = mkSwitch("Outline remaining time", "sunflow_remaining_outline");
+    this._elSunFlowRemainingOutlineColorRow = mkColorText("Remaining outline color", "sunflow_remaining_outline_color", "#000000");
+    this._elSunFlowRemainingOutlineColor = this._elSunFlowRemainingOutlineColorRow.children[0];
+    this._elSunFlowRemainingOutlineColorPicker = this._elSunFlowRemainingOutlineColorRow.children[1];
+    this._elSunFlowSecondaryColorRow = mkColorText("Bottom info color", "sunflow_secondary_color", "#ffffff");
+    this._elSunFlowSecondaryColor = this._elSunFlowSecondaryColorRow.children[0];
+    this._elSunFlowSecondaryColorPicker = this._elSunFlowSecondaryColorRow.children[1];
+    rowSunFlowColors2.appendChild(sunFlowRemainingOutlineSwitch.wrap);
+    rowSunFlowColors2.appendChild(this._elSunFlowRemainingOutlineColorRow);
+    rowSunFlowColors2.appendChild(this._elSunFlowSecondaryColorRow);
+    root.appendChild(rowSunFlowColors2);
+
     this._sunFlowRows = [
       sunFlowTitle,
       sunFlowNote,
@@ -11082,6 +11164,8 @@ const row2 = document.createElement("div");
       rowSunFlowUnits,
       rowSunFlowStyle,
       rowSunFlowTextStyle,
+      rowSunFlowColors1,
+      rowSunFlowColors2,
     ];
     this._sunFlowEntityControls = [
       [this._elSunFlowSunEntity, "sunflow_sun_entity"],
@@ -11100,6 +11184,7 @@ const row2 = document.createElement("div");
       [sunFlowAzimuthSwitch.sw, "sunflow_show_azimuth"],
       [sunFlowRemainingSwitch.sw, "sunflow_show_remaining"],
       [sunFlowScaleSwitch.sw, "sunflow_show_scale"],
+      [sunFlowRemainingOutlineSwitch.sw, "sunflow_remaining_outline"],
     ];
     this._sunFlowTextControls = [
       [this._elSunFlowSunriseLabel, "sunflow_sunrise_label"],
@@ -11459,8 +11544,19 @@ root.appendChild(rowOpt);
     secInt.className = "section";
     const secTitle = document.createElement("div");
     secTitle.className = "section-title";
-    secTitle.innerText = "Intervals (also used as segment blocks on Battery, garage door, blinds etc. For wash machine and tumble dryer use seconds field to set speed: quick=1 or lower, slow =3 or higher)";
+    secTitle.innerText = "Intervals";
     secInt.appendChild(secTitle);
+
+    const intervalNote = document.createElement("div");
+    intervalNote.className = "note";
+    intervalNote.innerText = "Intervals are also used as segment blocks for Battery, Garage Door, Blinds and similar symbols. For Washing Machine and Tumble Dryer, use the Seconds field to set animation speed: quick = 1 or lower, slow = 3 or higher.";
+    secInt.appendChild(intervalNote);
+
+    this._sunFlowIntervalNote = document.createElement("div");
+    this._sunFlowIntervalNote.className = "note";
+    this._sunFlowIntervalNote.style.display = "none";
+    this._sunFlowIntervalNote.innerText = "SunFlow matches intervals against the current solar elevation in degrees. It uses Solar elevation entity when configured; otherwise it uses the elevation attribute from the selected Sun entity (normally sun.sun).";
+    secInt.appendChild(this._sunFlowIntervalNote);
 
     const head = document.createElement("div");
     head.className = "section-head";
@@ -12054,6 +12150,15 @@ varsHead.innerHTML = `
       if (this._elWindGaugeValueColor) this._elWindGaugeValueColor.value = gaugeValueColor;
       if (this._elWindGaugeValueColorPicker) this._elWindGaugeValueColorPicker.value = toPickerHex(gaugeValueColor, "#ffffff");
     }
+    if (this._rowWindGaugeOutline && this._swWindGaugeValueOutline && this._elWindGaugeValueOutlineColorRow) {
+      this._rowWindGaugeOutline.style.display = showWindGaugeDetails ? "" : "none";
+      const gaugeValueOutline = this._config.wind_gauge_value_outline !== false;
+      this._swWindGaugeValueOutline.checked = gaugeValueOutline;
+      this._elWindGaugeValueOutlineColorRow.style.display = gaugeValueOutline ? "" : "none";
+      const gaugeValueOutlineColor = normalizeHex(this._config.wind_gauge_value_outline_color, "#000000");
+      if (this._elWindGaugeValueOutlineColor) this._elWindGaugeValueOutlineColor.value = gaugeValueOutlineColor;
+      if (this._elWindGaugeValueOutlineColorPicker) this._elWindGaugeValueOutlineColorPicker.value = toPickerHex(gaugeValueOutlineColor, "#000000");
+    }
     if (this._rowWindGaugeLabels && this._elWindGaugeSpeedLabel && this._elWindGaugeMaxLabel) {
       this._rowWindGaugeLabels.style.display = showWindGaugeDetails ? "" : "none";
       this._elWindGaugeSpeedLabel.value = String(this._config.wind_gauge_speed_label ?? "Wind");
@@ -12075,6 +12180,9 @@ varsHead.innerHTML = `
     }
 
     const isSunFlow = (baseSym === "sun_flow");
+    if (this._sunFlowIntervalNote) {
+      this._sunFlowIntervalNote.style.display = isSunFlow ? "" : "none";
+    }
     (this._sunFlowRows || []).forEach((row) => {
       if (row) row.style.display = isSunFlow ? "" : "none";
     });
@@ -12098,6 +12206,24 @@ varsHead.innerHTML = `
       const sunFlowValueColor = normalizeHex(this._config.sunflow_value_color, "#ffffff");
       if (this._elSunFlowValueColor) this._elSunFlowValueColor.value = sunFlowValueColor;
       if (this._elSunFlowValueColorPicker) this._elSunFlowValueColorPicker.value = toPickerHex(sunFlowValueColor, "#ffffff");
+
+      const sunFlowSunriseColor = normalizeHex(this._config.sunflow_sunrise_color, "#ffffff");
+      if (this._elSunFlowSunriseColor) this._elSunFlowSunriseColor.value = sunFlowSunriseColor;
+      if (this._elSunFlowSunriseColorPicker) this._elSunFlowSunriseColorPicker.value = toPickerHex(sunFlowSunriseColor, "#ffffff");
+      const sunFlowSunsetColor = normalizeHex(this._config.sunflow_sunset_color, "#ffffff");
+      if (this._elSunFlowSunsetColor) this._elSunFlowSunsetColor.value = sunFlowSunsetColor;
+      if (this._elSunFlowSunsetColorPicker) this._elSunFlowSunsetColorPicker.value = toPickerHex(sunFlowSunsetColor, "#ffffff");
+      const sunFlowRemainingColor = normalizeHex(this._config.sunflow_remaining_color, "#ffffff");
+      if (this._elSunFlowRemainingColor) this._elSunFlowRemainingColor.value = sunFlowRemainingColor;
+      if (this._elSunFlowRemainingColorPicker) this._elSunFlowRemainingColorPicker.value = toPickerHex(sunFlowRemainingColor, "#ffffff");
+      const sunFlowRemainingOutline = this._config.sunflow_remaining_outline !== false;
+      if (this._elSunFlowRemainingOutlineColorRow) this._elSunFlowRemainingOutlineColorRow.style.display = sunFlowRemainingOutline ? "" : "none";
+      const sunFlowRemainingOutlineColor = normalizeHex(this._config.sunflow_remaining_outline_color, "#000000");
+      if (this._elSunFlowRemainingOutlineColor) this._elSunFlowRemainingOutlineColor.value = sunFlowRemainingOutlineColor;
+      if (this._elSunFlowRemainingOutlineColorPicker) this._elSunFlowRemainingOutlineColorPicker.value = toPickerHex(sunFlowRemainingOutlineColor, "#000000");
+      const sunFlowSecondaryColor = normalizeHex(this._config.sunflow_secondary_color, "#ffffff");
+      if (this._elSunFlowSecondaryColor) this._elSunFlowSecondaryColor.value = sunFlowSecondaryColor;
+      if (this._elSunFlowSecondaryColorPicker) this._elSunFlowSecondaryColorPicker.value = toPickerHex(sunFlowSecondaryColor, "#ffffff");
     }
     if (this._ffShowScale) {
       this._ffShowScale.label = isWindDirection ? "Show compass scale" : "Show scale (ticks)";
