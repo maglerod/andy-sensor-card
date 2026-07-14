@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.7.2
+ * Andy Sensor Card v1.0.8
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -17,7 +17,7 @@
 */
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.7.2";
+const CARD_VERSION = "1.0.8";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
 
 //console.info(CARD_TAGLINE);
@@ -58,6 +58,15 @@ const DEFAULT_INTERVALS = [
   { id: "it4", to: 100, color: "#16a34a", outline: "#ffffff", scale_color: "#16a34a", gradient: { enabled: false, from: "#16a34a", to: "#16a34a" } },
 ];
 
+// Shared wind-speed colors for both optional compass gauges.
+const DEFAULT_WIND_GAUGE_INTERVALS = [
+  { id: "wgi0", to: 3,   color: "#22c55e", outline: "#ffffff", scale_color: "#22c55e", gradient: { enabled: false, from: "#22c55e", to: "#22c55e" } },
+  { id: "wgi1", to: 8,   color: "#84cc16", outline: "#ffffff", scale_color: "#84cc16", gradient: { enabled: false, from: "#84cc16", to: "#84cc16" } },
+  { id: "wgi2", to: 14,  color: "#f59e0b", outline: "#ffffff", scale_color: "#f59e0b", gradient: { enabled: false, from: "#f59e0b", to: "#f59e0b" } },
+  { id: "wgi3", to: 20,  color: "#f97316", outline: "#ffffff", scale_color: "#f97316", gradient: { enabled: false, from: "#f97316", to: "#f97316" } },
+  { id: "wgi4", to: 100, color: "#ef4444", outline: "#ffffff", scale_color: "#ef4444", gradient: { enabled: false, from: "#ef4444", to: "#ef4444" } },
+];
+
 function deepClone(x) { return JSON.parse(JSON.stringify(x ?? {})); }
 function clamp01(x) { return Math.max(0, Math.min(1, x)); }
 function clampInt(v, minV, maxV, fallbackV) {
@@ -71,11 +80,30 @@ function clampInt(v, minV, maxV, fallbackV) {
   const hi = Math.max(minN, maxN);
   return Math.max(lo, Math.min(hi, i));
 }
-function isHexColor(s) { return typeof s === "string" && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(s).trim()); }
+function isHexColor(s) { return typeof s === "string" && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(String(s).trim()); }
+function isCssColorValue(s) {
+  if (typeof s !== "string") return false;
+  const t = String(s).trim();
+  if (!t) return false;
+  if (isHexColor(t)) return true;
+  if (/^transparent$/i.test(t)) return true;
+  if (/^rgba?\(/i.test(t)) return true;
+  if (/^hsla?\(/i.test(t)) return true;
+  return false;
+}
 function normalizeHex(s, fallback = "#22c55e") {
   if (!s) return fallback;
   const t = String(s).trim();
-  return isHexColor(t) ? t : fallback;
+  return isCssColorValue(t) ? t : fallback;
+}
+function toPickerHex(s, fallback = "#ffffff") {
+  const t = normalizeHex(s, fallback);
+  if (!isHexColor(t)) return normalizeHex(fallback, "#ffffff").slice(0, 7);
+  const h = String(t).trim().replace("#", "");
+  if (h.length === 3 || h.length === 4) {
+    return `#${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}`;
+  }
+  return `#${h.slice(0, 6)}`;
 }
 
 function escapeHtml(s) {
@@ -95,6 +123,29 @@ function escapeHtml(s) {
 function stopBubble(e) {
   try { e && e.stopPropagation && e.stopPropagation(); } catch (_) {}
   try { e && e.stopImmediatePropagation && e.stopImmediatePropagation(); } catch (_) {}
+}
+
+// HA 2026.5 removed ha-textfield in favor of ha-input. Keep older HA releases
+// working as well, and bridge the renamed helper-text property.
+function createEditorInput() {
+  const hasHaInput = !!customElements.get("ha-input");
+  const tag = hasHaInput ? "ha-input" : "ha-textfield";
+  const input = document.createElement(tag);
+
+  if (hasHaInput) {
+    Object.defineProperty(input, "helperText", {
+      configurable: true,
+      get() { return this.hint || ""; },
+      set(value) { this.hint = value == null ? "" : String(value); },
+    });
+    Object.defineProperty(input, "persistentHelperText", {
+      configurable: true,
+      get() { return !!this.hint; },
+      set() {},
+    });
+  }
+
+  return input;
 }
 
 // Numeric clamp helper
@@ -135,6 +186,113 @@ function isLightHex(hex, threshold = 0.92) {
   const rgb = hexToRgb(hex);
   if (!rgb) return false;
   return relLuminanceFromRgb(rgb.r, rgb.g, rgb.b) >= threshold;
+}
+function normalizeDegrees(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  let out = n % 360;
+  if (out < 0) out += 360;
+  return out;
+}
+function normalizeDegreesForDisplay(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  const normalized = normalizeDegrees(n);
+  if (Math.abs(normalized) < 1e-9 && Math.abs(n) > 0) return 360;
+  return normalized;
+}
+const WIND_DIRECTION_LABELS = Object.freeze({
+  en: Object.freeze(["N", "NE", "E", "SE", "S", "SW", "W", "NW"]),
+  sv: Object.freeze(["N", "NO", "O", "SO", "S", "SV", "V", "NV"]),
+  da: Object.freeze(["N", "NØ", "Ø", "SØ", "S", "SV", "V", "NV"]),
+  no: Object.freeze(["N", "NØ", "Ø", "SØ", "S", "SV", "V", "NV"]),
+  fi: Object.freeze(["P", "KO", "I", "KA", "E", "LO", "L", "LU"]),
+  de: Object.freeze(["N", "NO", "O", "SO", "S", "SW", "W", "NW"]),
+  nl: Object.freeze(["N", "NO", "O", "ZO", "Z", "ZW", "W", "NW"]),
+  fr: Object.freeze(["N", "NE", "E", "SE", "S", "SO", "O", "NO"]),
+  es: Object.freeze(["N", "NE", "E", "SE", "S", "SO", "O", "NO"]),
+  it: Object.freeze(["N", "NE", "E", "SE", "S", "SO", "O", "NO"]),
+  pt: Object.freeze(["N", "NE", "E", "SE", "S", "SO", "O", "NO"]),
+  "pt-br": Object.freeze(["N", "NE", "L", "SE", "S", "SO", "O", "NO"]),
+});
+
+function normalizeWindDirectionLanguage(value) {
+  const raw = String(value ?? "auto").trim().toLowerCase().replace(/_/g, "-");
+  if (!raw || raw === "auto") return "auto";
+  if (raw === "nb" || raw === "nn") return "no";
+  if (raw === "pt-br") return "pt-br";
+  const base = raw.split("-")[0];
+  if (base === "nb" || base === "nn") return "no";
+  return Object.prototype.hasOwnProperty.call(WIND_DIRECTION_LABELS, base) ? base : "auto";
+}
+
+function normalizeWindGaugePosition(value) {
+  const position = String(value || "bottom").trim().toLowerCase();
+  return ["bottom", "top", "left", "right"].includes(position) ? position : "bottom";
+}
+
+function normalizeWindGaugeMode(value) {
+  const mode = String(value || "dual").trim().toLowerCase();
+  return mode === "single_max_marker" ? "single_max_marker" : "dual";
+}
+
+function parseSunFlowBoolean(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value !== 0;
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (["true", "on", "yes", "1", "rising", "ascending", "up", "above_horizon", "day", "daylight"].includes(raw)) return true;
+  if (["false", "off", "no", "0", "setting", "descending", "down", "below_horizon", "night"].includes(raw)) return false;
+  return null;
+}
+
+function parseSunFlowMoment(value, nowMs = Date.now()) {
+  if (value instanceof Date && Number.isFinite(value.getTime())) return new Date(value.getTime());
+  if (value == null || value === "") return null;
+
+  const raw = String(value).trim();
+  const timeOnly = raw.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (timeOnly) {
+    const date = new Date(nowMs);
+    date.setHours(Number(timeOnly[1]), Number(timeOnly[2]), Number(timeOnly[3] || 0), 0);
+    return date;
+  }
+
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric) && /^[-+]?\d+(?:\.\d+)?$/.test(raw)) {
+    const millis = Math.abs(numeric) < 1e12 ? numeric * 1000 : numeric;
+    const date = new Date(millis);
+    return Number.isFinite(date.getTime()) ? date : null;
+  }
+
+  const date = new Date(raw);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function shiftSunFlowDay(date, days) {
+  if (!date) return null;
+  const shifted = new Date(date.getTime());
+  shifted.setDate(shifted.getDate() + days);
+  return shifted;
+}
+
+function getWindDirectionLabels(configLanguage, hassLanguage) {
+  let language = normalizeWindDirectionLanguage(configLanguage);
+  if (language === "auto") {
+    const locale = String(hassLanguage || "sv").trim().toLowerCase().replace(/_/g, "-");
+    if (locale === "pt-br" || locale.startsWith("pt-br-")) language = "pt-br";
+    else if (locale === "nb" || locale === "nn" || locale.startsWith("nb-") || locale.startsWith("nn-")) language = "no";
+    else {
+      const base = locale.split("-")[0];
+      language = Object.prototype.hasOwnProperty.call(WIND_DIRECTION_LABELS, base) ? base : "en";
+    }
+  }
+  return WIND_DIRECTION_LABELS[language] || WIND_DIRECTION_LABELS.en;
+}
+
+function degreesToCardinal(value, labels = WIND_DIRECTION_LABELS.sv) {
+  const deg = normalizeDegrees(value);
+  const index = Math.round(deg / 45) % labels.length;
+  return labels[index];
 }
 
 function uid(prefix = "it") {
@@ -639,6 +797,7 @@ this._gateAnimRaf = 0;
     this._ascPrevScroll = { left: 0, top: 0 };
     this._ascPrevScrollEl = null;
     this._ascPrevScrollOnScroll = null;
+    this._sunFlowClockTimer = 0;
   }
 
   _estimateMinCardHeightPx() {
@@ -651,6 +810,8 @@ this._gateAnimRaf = 0;
     );
 
     let px = 236 * scale;
+    if (sym === "wind_direction") px = 252 * scale;
+    if (sym === "sun_flow") px = 292 * scale;
     if (vp.startsWith("bottom")) px += 18 * scale;
     if (splitHorizontal) px += 14 * scale;
     if (this._config?.show_stats) px += 10 * scale;
@@ -673,11 +834,11 @@ this._gateAnimRaf = 0;
   }
 
   getGridOptions() {
-    const rows = this._estimateCardRows();
+    // The card height is content-driven and can change with symbol, scale and
+    // explicit card_height. Omitting row constraints lets Sections use the
+    // natural height, equivalent to grid_options.rows: null.
     return {
       columns: 6,
-      rows,
-      min_rows: rows,
       min_columns: 4,
     };
   }
@@ -722,6 +883,7 @@ this._gateAnimRaf = 0;
       if (inPreview) this.setAttribute("data-asc-preview", "1");
       else this.removeAttribute("data-asc-preview");
     } catch (_) {}
+    this._syncSunFlowClock();
   }
 
 
@@ -783,6 +945,64 @@ this._gateAnimRaf = 0;
       stats_position: "bottom_center",
 
       show_scale: false,
+      wind_show_degrees: true,
+      wind_show_direction: true,
+      wind_show_direction_markers: true,
+      wind_direction_language: "auto",
+      wind_degree_font_size: 0,
+      wind_direction_font_size: 0,
+      wind_direction_marker_font_size: 15,
+      wind_outline_width: 3.2,
+      wind_arrow_size: 82,
+      wind_arrow_thickness: 100,
+      wind_gauge_enabled: false,
+      wind_gauge_show_values: true,
+      wind_gauge_show_scale: false,
+      wind_gauge_speed_entity: "",
+      wind_gauge_max_entity: "",
+      wind_gauge_position: "bottom",
+      wind_gauge_mode: "dual",
+      wind_gauge_speed_label: "Wind",
+      wind_gauge_max_label: "Max",
+      wind_gauge_value_color: "#ffffff",
+      wind_gauge_min: 0,
+      wind_gauge_max: 30,
+      wind_gauge_decimals: 1,
+      wind_gauge_opacity: 90,
+      wind_gauge_track_opacity: 18,
+      wind_gauge_arc_width: 5,
+      wind_gauge_font_size: 8,
+      wind_gauge_intervals: deepClone(DEFAULT_WIND_GAUGE_INTERVALS),
+      sunflow_sun_entity: "",
+      sunflow_sunrise_entity: "",
+      sunflow_sunset_entity: "",
+      sunflow_elevation_entity: "",
+      sunflow_azimuth_entity: "",
+      sunflow_rising_entity: "",
+      sunflow_show_sunrise: true,
+      sunflow_show_sunset: true,
+      sunflow_show_daylight: true,
+      sunflow_show_now: true,
+      sunflow_show_elevation: true,
+      sunflow_show_azimuth: false,
+      sunflow_show_remaining: true,
+      sunflow_show_scale: true,
+      sunflow_sunrise_label: "Sunrise",
+      sunflow_sunset_label: "Sunset",
+      sunflow_daylight_label: "Daylight",
+      sunflow_now_label: "Now",
+      sunflow_elevation_label: "Elevation",
+      sunflow_azimuth_label: "Azimuth",
+      sunflow_remaining_label: "remaining",
+      sunflow_until_sunrise_label: "until sunrise",
+      sunflow_hours_label: "h",
+      sunflow_minutes_label: "min",
+      sunflow_unavailable_label: "Sun data unavailable",
+      sunflow_glow_strength: 85,
+      sunflow_sun_size: 14,
+      sunflow_arc_width: 2.5,
+      sunflow_font_scale: 100,
+      sunflow_value_color: "#ffffff",
       fan_show_frame: false, // Fan only
 
       fan_blade_count: 3, // Fan + Heatpump only (integer)
@@ -913,6 +1133,8 @@ const rawSym = String(this._config.symbol || "battery_liquid");
       "garage_door",
       "blind",
       "window",
+      "wind_direction",
+      "sun_flow",
       "gate",
       "image",
       "gas_cylinder",
@@ -923,12 +1145,106 @@ const rawSym = String(this._config.symbol || "battery_liquid");
     if (!allowed.has(sym)) sym = "battery_liquid";
     this._config.symbol = sym;
 
+    this._config.wind_show_degrees = (typeof this._config.wind_show_degrees === "boolean") ? this._config.wind_show_degrees : true;
+    this._config.wind_show_direction = (typeof this._config.wind_show_direction === "boolean") ? this._config.wind_show_direction : true;
+    this._config.wind_show_direction_markers = (typeof this._config.wind_show_direction_markers === "boolean") ? this._config.wind_show_direction_markers : true;
+    this._config.wind_direction_language = normalizeWindDirectionLanguage(this._config.wind_direction_language);
+    this._config.wind_gauge_enabled = (typeof this._config.wind_gauge_enabled === "boolean") ? this._config.wind_gauge_enabled : false;
+    this._config.wind_gauge_show_values = (typeof this._config.wind_gauge_show_values === "boolean") ? this._config.wind_gauge_show_values : true;
+    this._config.wind_gauge_show_scale = (typeof this._config.wind_gauge_show_scale === "boolean") ? this._config.wind_gauge_show_scale : false;
+    this._config.wind_gauge_speed_entity = String(this._config.wind_gauge_speed_entity || "").trim();
+    this._config.wind_gauge_max_entity = String(this._config.wind_gauge_max_entity || "").trim();
+    this._config.wind_gauge_position = normalizeWindGaugePosition(this._config.wind_gauge_position);
+    this._config.wind_gauge_mode = normalizeWindGaugeMode(this._config.wind_gauge_mode);
+    this._config.wind_gauge_speed_label = String(this._config.wind_gauge_speed_label ?? "Wind").trim();
+    this._config.wind_gauge_max_label = String(this._config.wind_gauge_max_label ?? "Max").trim();
+    this._config.wind_gauge_value_color = normalizeHex(this._config.wind_gauge_value_color, "#ffffff");
+    [
+      "sunflow_sun_entity",
+      "sunflow_sunrise_entity",
+      "sunflow_sunset_entity",
+      "sunflow_elevation_entity",
+      "sunflow_azimuth_entity",
+      "sunflow_rising_entity",
+    ].forEach((key) => { this._config[key] = String(this._config[key] || "").trim(); });
+    [
+      "sunflow_show_sunrise",
+      "sunflow_show_sunset",
+      "sunflow_show_daylight",
+      "sunflow_show_now",
+      "sunflow_show_elevation",
+      "sunflow_show_azimuth",
+      "sunflow_show_remaining",
+      "sunflow_show_scale",
+    ].forEach((key) => { this._config[key] = this._config[key] !== false; });
+    this._config.sunflow_show_azimuth = this._config.sunflow_show_azimuth === true;
+    const sunFlowLabels = {
+      sunflow_sunrise_label: "Sunrise",
+      sunflow_sunset_label: "Sunset",
+      sunflow_daylight_label: "Daylight",
+      sunflow_now_label: "Now",
+      sunflow_elevation_label: "Elevation",
+      sunflow_azimuth_label: "Azimuth",
+      sunflow_remaining_label: "remaining",
+      sunflow_until_sunrise_label: "until sunrise",
+      sunflow_hours_label: "h",
+      sunflow_minutes_label: "min",
+      sunflow_unavailable_label: "Sun data unavailable",
+    };
+    Object.entries(sunFlowLabels).forEach(([key, fallback]) => {
+      this._config[key] = String(this._config[key] ?? fallback);
+    });
+    this._config.sunflow_value_color = normalizeHex(this._config.sunflow_value_color, "#ffffff");
+    {
+      const degreeFs = Number(this._config.wind_degree_font_size ?? 0);
+      this._config.wind_degree_font_size = (Number.isFinite(degreeFs) && degreeFs >= 0) ? degreeFs : 0;
+      const directionFs = Number(this._config.wind_direction_font_size ?? 0);
+      this._config.wind_direction_font_size = (Number.isFinite(directionFs) && directionFs >= 0) ? directionFs : 0;
+      const markerFs = Number(this._config.wind_direction_marker_font_size ?? 15);
+      this._config.wind_direction_marker_font_size = Number.isFinite(markerFs) ? clamp(markerFs, 8, 24) : 15;
+      const outlineWidth = Number(this._config.wind_outline_width ?? 3.2);
+      this._config.wind_outline_width = Number.isFinite(outlineWidth) ? clamp(outlineWidth, 0, 16) : 3.2;
+      const arrowSize = Number(this._config.wind_arrow_size ?? 82);
+      this._config.wind_arrow_size = Number.isFinite(arrowSize) ? clamp(arrowSize, 25, 100) : 82;
+      const arrowThickness = Number(this._config.wind_arrow_thickness ?? 100);
+      this._config.wind_arrow_thickness = Number.isFinite(arrowThickness) ? clamp(arrowThickness, 40, 200) : 100;
+      const gaugeMin = Number(this._config.wind_gauge_min ?? 0);
+      this._config.wind_gauge_min = Number.isFinite(gaugeMin) ? gaugeMin : 0;
+      const gaugeMax = Number(this._config.wind_gauge_max ?? 30);
+      this._config.wind_gauge_max = Number.isFinite(gaugeMax) ? gaugeMax : 30;
+      this._config.wind_gauge_decimals = clampInt(this._config.wind_gauge_decimals ?? 1, 0, 3, 1);
+      const gaugeOpacity = Number(this._config.wind_gauge_opacity ?? 90);
+      this._config.wind_gauge_opacity = Number.isFinite(gaugeOpacity) ? clamp(gaugeOpacity, 0, 100) : 90;
+      const gaugeTrackOpacity = Number(this._config.wind_gauge_track_opacity ?? 18);
+      this._config.wind_gauge_track_opacity = Number.isFinite(gaugeTrackOpacity) ? clamp(gaugeTrackOpacity, 0, 100) : 18;
+      const gaugeArcWidth = Number(this._config.wind_gauge_arc_width ?? 5);
+      this._config.wind_gauge_arc_width = Number.isFinite(gaugeArcWidth) ? clamp(gaugeArcWidth, 1, 12) : 5;
+      const gaugeFontSize = Number(this._config.wind_gauge_font_size ?? 8);
+      this._config.wind_gauge_font_size = Number.isFinite(gaugeFontSize) ? clamp(gaugeFontSize, 6, 14) : 8;
+      const sunGlowStrength = Number(this._config.sunflow_glow_strength ?? 85);
+      this._config.sunflow_glow_strength = Number.isFinite(sunGlowStrength) ? clamp(sunGlowStrength, 0, 100) : 85;
+      const sunSize = Number(this._config.sunflow_sun_size ?? 14);
+      this._config.sunflow_sun_size = Number.isFinite(sunSize) ? clamp(sunSize, 7, 26) : 14;
+      const sunArcWidth = Number(this._config.sunflow_arc_width ?? 2.5);
+      this._config.sunflow_arc_width = Number.isFinite(sunArcWidth) ? clamp(sunArcWidth, 0.5, 10) : 2.5;
+      const sunFontScale = Number(this._config.sunflow_font_scale ?? 100);
+      this._config.sunflow_font_scale = Number.isFinite(sunFontScale) ? clamp(sunFontScale, 60, 160) : 100;
+    }
+
     // Default scale range for binary position symbols (Gate / Garage door / Blind)
     // If the user didn't explicitly set min/max, use 0..1 instead of 0..100.
     if ((sym === "gate" || sym === "garage_door" || sym === "blind" || sym === "window")) {
       if (!("min" in cfg)) this._config.min = 0;
       if (!("max" in cfg)) this._config.max = 1;
     }
+    if (sym === "wind_direction") {
+      if (!("min" in cfg)) this._config.min = 0;
+      if (!("max" in cfg)) this._config.max = 360;
+      if (!("show_scale" in cfg)) this._config.show_scale = true;
+      if (!("value_position" in cfg)) this._config.value_position = "hide";
+    }
+    if (sym === "sun_flow" && !("value_position" in cfg)) this._config.value_position = "hide";
+    this._config.show_scale = (this._config.show_scale === true || String(this._config.show_scale).trim().toLowerCase() === "true");
 
 
     // Industrial look only applies where we have modern renderings, and never for Fan/Heatpump.
@@ -1006,6 +1322,10 @@ const rawSym = String(this._config.symbol || "battery_liquid");
       this._config.intervals = deepClone(DEFAULT_INTERVALS);
     }
     this._config.intervals = this._config.intervals.map(normalizeInterval);
+    if (!Array.isArray(this._config.wind_gauge_intervals) || this._config.wind_gauge_intervals.length === 0) {
+      this._config.wind_gauge_intervals = deepClone(DEFAULT_WIND_GAUGE_INTERVALS);
+    }
+    this._config.wind_gauge_intervals = this._config.wind_gauge_intervals.map(normalizeInterval);
 
     // Badges (global overlay)
     if (!Array.isArray(this._config.badges)) this._config.badges = [];
@@ -1171,6 +1491,18 @@ _applyInsideValueY() {
   wrap.style.setProperty("--asc-value-y", `${yPct}%`);
 }  
 
+  _syncSunFlowClock() {
+    const active = String(this._config?.symbol || "").trim().toLowerCase() === "sun_flow";
+    if (active && !this._sunFlowClockTimer) {
+      this._sunFlowClockTimer = setInterval(() => {
+        try { this.requestUpdate(); } catch (_) {}
+      }, 30000);
+    } else if (!active && this._sunFlowClockTimer) {
+      clearInterval(this._sunFlowClockTimer);
+      this._sunFlowClockTimer = 0;
+    }
+  }
+
   async _maybeUpdateStats() {
     if (!this.hass || !this._config?.show_stats) return;
 
@@ -1293,6 +1625,7 @@ _applyInsideValueY() {
     } catch (_) {}
   }
 updated(changedProps) {
+  if (changedProps.has("_config")) this._syncSunFlowClock();
   if (changedProps.has("hass") || changedProps.has("_config")) {
     this._maybeUpdateStats();
   }
@@ -1343,6 +1676,10 @@ updated(changedProps) {
     try { this._badgeSymbolStop(); } catch (_) {}
     try { this._garageStopAnimation(); } catch (_) {}
     try { this._gateStopAnimation(); } catch (_) {}
+    if (this._sunFlowClockTimer) {
+      clearInterval(this._sunFlowClockTimer);
+      this._sunFlowClockTimer = 0;
+    }
     try {
       if (this._ascPrevScrollEl && this._ascPrevScrollOnScroll) {
         this._ascPrevScrollEl.removeEventListener("scroll", this._ascPrevScrollOnScroll);
@@ -3278,12 +3615,15 @@ _drawScaleDom() {
       ? `${baseSym}_modern`
       : baseSym;
 
-    let value1 = this._getStateValue(this._config.entity);
-    const rawState1 = this._getRawState(this._config.entity);
+    const primaryEntityId = baseSym === "sun_flow"
+      ? (String(this._config.sunflow_sun_entity || "").trim() || this._config.entity)
+      : this._config.entity;
+    let value1 = this._getStateValue(primaryEntityId);
+    const rawState1 = this._getRawState(primaryEntityId);
 
     // For Gate / Garage door / Blind: allow non-numeric states like "opening"/"closing"
     // to be treated as valid (so the card doesn't show "Entity not available").
-    if (value1 === null && rawState1 != null && (sym === "garage_door" || sym === "gate" || sym === "blind")) {
+    if (value1 === null && rawState1 != null && (sym === "garage_door" || sym === "gate" || sym === "blind" || sym === "sun_flow")) {
       const rs = String(rawState1).trim();
       const rsl = rs.toLowerCase();
       if (rs !== "" && rsl !== "unknown" && rsl !== "unavailable") {
@@ -3337,13 +3677,15 @@ _drawScaleDom() {
       ? `${shown1} / ${shown2}`
       : shown1;
 
-    const isHorizontal = (this._config.orientation === "horizontal");
+    const isHorizontal = (this._config.orientation === "horizontal") && baseSym !== "sun_flow";
 
     const isImageFull = (baseSym === "image") && !!this._config.image_full_card;
     const splitHorizontal = ((sym === "battery_splitted_segments" || sym === "battery_splitted_segments_modern")) && isHorizontal;
 
     const vp = String(this._config.value_position || "top_right");
-    const showAnyValue = (vp !== "hide");
+    const isWindDirection = (baseSym === "wind_direction");
+    const isSunFlow = (baseSym === "sun_flow");
+    const showAnyValue = !isWindDirection && !isSunFlow && (vp !== "hide");
     const showHeaderValue = showAnyValue && (vp === "top_left" || vp === "top_right" || vp === "top_center");
     const showBottomValue = showAnyValue && (vp === "bottom_left" || vp === "bottom_right" || vp === "bottom_center");
     const showInsideValue = showAnyValue && (vp === "inside");
@@ -3351,6 +3693,28 @@ _drawScaleDom() {
     const valueStyle = (this._config.value_font_size && Number(this._config.value_font_size) > 0)
       ? `font-size:${Number(this._config.value_font_size)}px;`
       : "";
+
+    const windValueDeg = normalizeDegreesForDisplay(value1);
+    const windDirectionLabels = getWindDirectionLabels(this._config.wind_direction_language, this.hass?.locale?.language);
+    const windDirectionText = degreesToCardinal(value1, windDirectionLabels);
+    const windShowDegree = this._config.wind_show_degrees !== false;
+    const windShowDirection = this._config.wind_show_direction !== false;
+    const windDegreeFontStyle = `font-size:${(Number(this._config.wind_degree_font_size) > 0) ? Number(this._config.wind_degree_font_size) : (windShowDirection ? 30 : 36)}px;`;
+    const windDirectionFontStyle = `font-size:${(Number(this._config.wind_direction_font_size) > 0) ? Number(this._config.wind_direction_font_size) : 19}px;`;
+    const windGaugeEntities = [
+      String(this._config.wind_gauge_speed_entity || "").trim(),
+      String(this._config.wind_gauge_max_entity || "").trim(),
+    ].filter(Boolean);
+    const windGaugeConfigured = this._config.wind_gauge_enabled === true
+      && windGaugeEntities.some((entityId) => this._getStateValue(entityId) != null);
+    const windGaugePosition = normalizeWindGaugePosition(this._config.wind_gauge_position);
+    const windCenterTransform = {
+      bottom: "translate(-50%, -62%)",
+      top: "translate(-50%, -10%)",
+      left: "translate(-30%, -36%)",
+      right: "translate(-70%, -36%)",
+    }[windGaugePosition];
+    const windCenterStyle = windGaugeConfigured ? `transform:${windCenterTransform};` : "";
 
     const outlined = !!this._config.outline_value;
     const valueClass = `value${outlined ? " outlined" : ""}`;
@@ -3436,6 +3800,12 @@ _drawScaleDom() {
               <div class="symbolRotator ${isHorizontal ? "rot-h" : ""}">
                 ${this._renderSymbol({ value: value1, value2, interval, glassOn, charging1: this._isOnLikeState(this._config.charging_state_entity), charging2: ((sym === "battery_splitted_segments" || sym === "battery_splitted_segments_modern")) ? this._isOnLikeState(this._config.charging_state_entity2) : false })}
                 ${!isImageFull ? this._renderBadgesLayer(isHorizontal) : ""}
+                ${isWindDirection ? html`
+                  <div class="windCenterOverlay" style="${windCenterStyle}">
+                    ${windShowDegree ? html`<div class="deg${outlined ? " outlined" : ""}" style="${windDegreeFontStyle}">${fmtNum(windValueDeg, decimals) ?? String(windValueDeg)}°</div>` : ""}
+                    ${windShowDirection ? html`<div class="dir${outlined ? " outlined" : ""}" style="${windDirectionFontStyle}">${windDirectionText}</div>` : ""}
+                  </div>
+                ` : ""}
               </div>
 
               ${((sym === "battery_splitted_segments" || sym === "battery_splitted_segments_modern") && shown2 != null && isHorizontal && showAnyValue) ? html`
@@ -3844,11 +4214,711 @@ const root = this.renderRoot;
     if (sym === "garage_door") return this._garageDoorSvg(o); //v1.6.15
     if (sym === "blind") return this._blindSvg(o); //v1.6.26
     if (sym === "window") return this._windowSvg(o); //v1.6.XX
+    if (sym === "wind_direction") return this._windDirectionSvg(o); //v1.0.7.3
+    if (sym === "sun_flow") return this._sunFlowSvg(o);
     if (sym === "gate") return this._gateSvg(o); //v1.6.30
     if (sym === "image") return this._imageSvg(o); //v1.6.38
     if (sym === "gas_cylinder") return this._gasCylinderLiquidSvg(o); //v1.0.2
 
     return this._batteryLiquidSvg(o);
+  }
+
+  _sunFlowNowMs() {
+    return Date.now();
+  }
+
+  _getSunFlowData() {
+    const nowMs = this._sunFlowNowMs();
+    const now = new Date(nowMs);
+    const sunEntityId = String(this._config?.sunflow_sun_entity || "").trim() || this._config?.entity;
+    const sunState = this.hass?.states?.[sunEntityId] || null;
+    const attrs = sunState?.attributes || {};
+    const readEntity = (entityId) => {
+      const id = String(entityId || "").trim();
+      return id ? this.hass?.states?.[id]?.state : null;
+    };
+    const overrideOrAttribute = (entityKey, attributeKey) => {
+      const entityId = String(this._config?.[entityKey] || "").trim();
+      return entityId ? readEntity(entityId) : attrs?.[attributeKey];
+    };
+
+    const elevation = toNumberMaybe(overrideOrAttribute("sunflow_elevation_entity", "elevation"));
+    const azimuth = toNumberMaybe(overrideOrAttribute("sunflow_azimuth_entity", "azimuth"));
+    const risingRaw = overrideOrAttribute("sunflow_rising_entity", "rising");
+    let rising = parseSunFlowBoolean(risingRaw);
+
+    const stateRaw = String(sunState?.state || "").trim();
+    let above = parseSunFlowBoolean(stateRaw);
+    if (stateRaw.toLowerCase() === "above_horizon") above = true;
+    if (stateRaw.toLowerCase() === "below_horizon") above = false;
+    if (above == null && Number.isFinite(elevation)) above = elevation > 0;
+
+    let sunrise = parseSunFlowMoment(
+      overrideOrAttribute("sunflow_sunrise_entity", "next_rising"),
+      nowMs
+    );
+    let sunset = parseSunFlowMoment(
+      overrideOrAttribute("sunflow_sunset_entity", "next_setting"),
+      nowMs
+    );
+
+    if (!sunrise || !sunset) {
+      return {
+        valid: false,
+        now,
+        nowMs,
+        sunEntityId,
+        stateRaw,
+        elevation,
+        azimuth,
+        rising,
+        above: above === true,
+      };
+    }
+
+    if (above === true) {
+      if (sunrise.getTime() > nowMs) {
+        const estimatedSunrise = shiftSunFlowDay(sunrise, -1);
+        const lastChanged = parseSunFlowMoment(sunState?.last_changed, nowMs);
+        const isBuiltInSunState = stateRaw.toLowerCase() === "above_horizon";
+        const lastChangedLooksLikeSunrise = isBuiltInSunState
+          && lastChanged
+          && lastChanged.getTime() <= nowMs
+          && (nowMs - lastChanged.getTime()) < (20 * 3600000)
+          && Math.abs(lastChanged.getTime() - estimatedSunrise.getTime()) < (2 * 3600000);
+        sunrise = lastChangedLooksLikeSunrise ? lastChanged : estimatedSunrise;
+      }
+      while (sunset.getTime() <= nowMs) sunset = shiftSunFlowDay(sunset, 1);
+      while (sunset.getTime() <= sunrise.getTime()) sunset = shiftSunFlowDay(sunset, 1);
+    } else if (above === false) {
+      while (sunset.getTime() <= sunrise.getTime()) sunset = shiftSunFlowDay(sunset, 1);
+      while (sunset.getTime() <= nowMs) {
+        sunrise = shiftSunFlowDay(sunrise, 1);
+        sunset = shiftSunFlowDay(sunset, 1);
+      }
+    } else {
+      while (sunset.getTime() <= sunrise.getTime()) sunset = shiftSunFlowDay(sunset, 1);
+      above = nowMs >= sunrise.getTime() && nowMs < sunset.getTime();
+      if (!above && nowMs >= sunset.getTime()) {
+        sunrise = shiftSunFlowDay(sunrise, 1);
+        sunset = shiftSunFlowDay(sunset, 1);
+      }
+    }
+
+    const daylightMs = Math.max(0, sunset.getTime() - sunrise.getTime());
+    const valid = daylightMs >= 60000 && daylightMs <= (48 * 3600000);
+    const progress = valid && above
+      ? clamp01((nowMs - sunrise.getTime()) / daylightMs)
+      : 0;
+    if (rising == null) rising = above ? progress <= 0.5 : null;
+    const remainingMs = above
+      ? Math.max(0, sunset.getTime() - nowMs)
+      : Math.max(0, sunrise.getTime() - nowMs);
+
+    return {
+      valid,
+      now,
+      nowMs,
+      sunEntityId,
+      stateRaw,
+      sunrise,
+      sunset,
+      daylightMs,
+      remainingMs,
+      progress,
+      elevation,
+      azimuth,
+      rising,
+      above: above === true,
+    };
+  }
+
+  _formatSunFlowClock(date) {
+    if (!(date instanceof Date) || !Number.isFinite(date.getTime())) return "--:--";
+    try {
+      return new Intl.DateTimeFormat(this.hass?.locale?.language || undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      }).format(date);
+    } catch (_) {
+      return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+    }
+  }
+
+  _sunFlowDurationParts(milliseconds) {
+    const totalMinutes = Math.max(0, Math.round(Number(milliseconds || 0) / 60000));
+    return {
+      hours: Math.floor(totalMinutes / 60),
+      minutes: totalMinutes % 60,
+    };
+  }
+
+  _formatSunFlowDuration(milliseconds, padMinutes = false) {
+    const parts = this._sunFlowDurationParts(milliseconds);
+    const hourLabel = String(this._config?.sunflow_hours_label ?? "h");
+    const minuteLabel = String(this._config?.sunflow_minutes_label ?? "min");
+    const minuteText = padMinutes ? String(parts.minutes).padStart(2, "0") : String(parts.minutes);
+    if (parts.hours <= 0) return `${minuteText} ${minuteLabel}`.trim();
+    return `${parts.hours} ${hourLabel} ${minuteText} ${minuteLabel}`.trim();
+  }
+
+  _sunFlowSvg(opts) {
+    const data = this._getSunFlowData();
+    const numericElevation = Number.isFinite(data.elevation) ? data.elevation : null;
+    const interval = normalizeInterval(
+      numericElevation == null
+        ? opts?.interval
+        : this._findIntervalForStateOrValue(numericElevation, data.stateRaw, this._config?.intervals)
+    );
+    const activeColor = normalizeHex(interval.color, "#fbbf24");
+    const outlineColor = normalizeHex(interval.outline, "#94a3b8");
+    const scaleColor = normalizeHex(interval.scale_color, "#94a3b8");
+    const gradientEnabled = !!interval.gradient?.enabled;
+    const gradientFrom = normalizeHex(interval.gradient?.from, activeColor);
+    const gradientTo = normalizeHex(interval.gradient?.to, gradientFrom);
+    const valueColor = normalizeHex(this._config?.sunflow_value_color, "#ffffff");
+
+    const sunSize = clamp(Number(this._config?.sunflow_sun_size ?? 14), 7, 26);
+    const leftX = 30;
+    const rightX = 310;
+    const centerX = 170;
+    const horizonY = 116;
+    const arcHeight = Math.min(86, horizonY - sunSize - 12);
+    const controlY = horizonY - (arcHeight * 2);
+    const arcPath = `M ${leftX} ${horizonY} Q ${centerX} ${controlY} ${rightX} ${horizonY}`;
+    const progress = data.valid && data.above ? clamp01(data.progress) : 0;
+    const sunX = leftX + ((rightX - leftX) * progress);
+    const heightFactor = data.above ? clamp01(4 * progress * (1 - progress)) : 0;
+    const sunY = horizonY - (arcHeight * heightFactor);
+    const glowStrength = clamp(Number(this._config?.sunflow_glow_strength ?? 85), 0, 100) / 100;
+    const glowOpacity = clamp01(heightFactor * glowStrength);
+    const arcWidth = clamp(Number(this._config?.sunflow_arc_width ?? 2.5), 0.5, 10);
+    const fontScale = clamp(Number(this._config?.sunflow_font_scale ?? 100), 60, 160) / 100;
+
+    const tickPath = [0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875].map((tickProgress) => {
+      const x = leftX + ((rightX - leftX) * tickProgress);
+      const y = horizonY - (arcHeight * 4 * tickProgress * (1 - tickProgress));
+      const dx = rightX - leftX;
+      const dy = -4 * arcHeight * (1 - (2 * tickProgress));
+      const length = Math.hypot(dx, dy) || 1;
+      // The upward normal keeps every tick completely outside the solar arc.
+      const outX = dy / length;
+      const outY = -dx / length;
+      const gap = 3.4;
+      const outer = tickProgress === 0.5 ? 10.2 : 8.4;
+      return `M ${(x + (outX * gap)).toFixed(2)} ${(y + (outY * gap)).toFixed(2)} L ${(x + (outX * outer)).toFixed(2)} ${(y + (outY * outer)).toFixed(2)}`;
+    }).join(" ");
+
+    const sunRayPath = Array.from({ length: 8 }, (_, index) => {
+      const angle = (index * Math.PI) / 4;
+      const inner = sunSize + 4;
+      const outer = sunSize + 9;
+      const x1 = sunX + (Math.cos(angle) * inner);
+      const y1 = sunY + (Math.sin(angle) * inner);
+      const x2 = sunX + (Math.cos(angle) * outer);
+      const y2 = sunY + (Math.sin(angle) * outer);
+      return `M ${x1.toFixed(2)} ${y1.toFixed(2)} L ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+    }).join(" ");
+
+    const sunriseText = data.valid ? this._formatSunFlowClock(data.sunrise) : "--:--";
+    const sunsetText = data.valid ? this._formatSunFlowClock(data.sunset) : "--:--";
+    const nowText = this._formatSunFlowClock(data.now);
+    const daylightParts = this._sunFlowDurationParts(data.daylightMs);
+    const remainingDuration = this._formatSunFlowDuration(data.remainingMs, false);
+    const remainingLabel = data.above
+      ? String(this._config?.sunflow_remaining_label ?? "remaining")
+      : String(this._config?.sunflow_until_sunrise_label ?? "until sunrise");
+    const remainingText = `${remainingDuration} ${remainingLabel}`.trim();
+    const elevationText = Number.isFinite(data.elevation)
+      ? `${String(this._config?.sunflow_elevation_label ?? "Elevation")} ${fmtNumLocale(data.elevation, 1, this.hass?.locale?.language) ?? data.elevation}\u00B0`
+      : "";
+    const azimuthText = Number.isFinite(data.azimuth)
+      ? `${String(this._config?.sunflow_azimuth_label ?? "Azimuth")} ${fmtNumLocale(data.azimuth, 1, this.hass?.locale?.language) ?? data.azimuth}\u00B0`
+      : "";
+    const secondaryParts = [];
+    if (this._config?.sunflow_show_now !== false) secondaryParts.push(`${String(this._config?.sunflow_now_label ?? "Now")} ${nowText}`);
+    if (this._config?.sunflow_show_elevation !== false && elevationText) secondaryParts.push(elevationText);
+    if (this._config?.sunflow_show_azimuth === true && azimuthText) secondaryParts.push(azimuthText);
+    const secondaryText = secondaryParts.join("  \u2022  ");
+
+    const remainingFontSize = 9.4 * fontScale;
+    const estimatedRemainingWidth = clamp(remainingText.length * remainingFontSize * 0.56, 34, 150);
+    const candidateRightDotX = clamp(sunX + sunSize + 5, 45, 295);
+    const candidateRightTextX = candidateRightDotX + 18.2;
+    const candidateLeftDotX = clamp(sunX - sunSize - 5, 45, 295);
+    const candidateLeftTextX = candidateLeftDotX - 18.2;
+    const remainingFitsRight = (candidateRightTextX + estimatedRemainingWidth) <= 332;
+    const remainingFitsLeft = (candidateLeftTextX - estimatedRemainingWidth) >= 8;
+    const remainingOnRight = remainingFitsRight || !remainingFitsLeft;
+    const remainingDirection = remainingOnRight ? 1 : -1;
+    const remainingDotX = clamp(sunX + (remainingDirection * (sunSize + 5)), 45, 295);
+    const remainingLineStartX = remainingDotX + (remainingDirection * 3.2);
+    const remainingLineEndX = remainingDotX + (remainingDirection * 13.2);
+    const remainingTextX = remainingLineEndX + (remainingDirection * 5);
+    const remainingAnchor = remainingOnRight ? "start" : "end";
+    const remainingFarX = remainingTextX + (remainingDirection * estimatedRemainingWidth);
+    const remainingMinX = clamp(Math.min(remainingDotX, remainingFarX), leftX, rightX);
+    const remainingMaxX = clamp(Math.max(remainingDotX, remainingFarX), leftX, rightX);
+    const closestToApexX = clamp(centerX, remainingMinX, remainingMaxX);
+    const closestToApexProgress = clamp01((closestToApexX - leftX) / (rightX - leftX));
+    const highestArcYUnderLabel = horizonY - (arcHeight * 4 * closestToApexProgress * (1 - closestToApexProgress));
+    const remainingY = clamp(
+      Math.min(sunY - sunSize - 9, highestArcYUnderLabel - ((remainingFontSize * 0.38) + 4)),
+      14,
+      96
+    );
+
+    const arcGradientId = `sunFlowArc_${this._instanceId}`;
+    const sunGradientId = `sunFlowSun_${this._instanceId}`;
+    const sunHighlightId = `sunFlowHighlight_${this._instanceId}`;
+    const horizonGlowId = `sunFlowHorizon_${this._instanceId}`;
+    const sunGlowId = `sunFlowGlow_${this._instanceId}`;
+    const horizonBlurId = `sunFlowBlur_${this._instanceId}`;
+    const horizonClipId = `sunFlowHorizonClip_${this._instanceId}`;
+    const hourLabel = String(this._config?.sunflow_hours_label ?? "h");
+    const minuteLabel = String(this._config?.sunflow_minutes_label ?? "min");
+    const validDisplay = data.valid ? "inline" : "none";
+
+    return html`
+      <svg class="sensor-svg sun-flow-svg" viewBox="0 0 340 230" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Sun flow">
+        <defs>
+          <linearGradient id="${arcGradientId}" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="${gradientFrom}"></stop>
+            <stop offset="100%" stop-color="${gradientEnabled ? gradientTo : gradientFrom}"></stop>
+          </linearGradient>
+          <radialGradient id="${sunGradientId}" cx="42%" cy="35%" r="70%">
+            <stop offset="0%" stop-color="${gradientEnabled ? gradientTo : activeColor}"></stop>
+            <stop offset="100%" stop-color="${gradientEnabled ? gradientFrom : activeColor}"></stop>
+          </radialGradient>
+          <radialGradient id="${sunHighlightId}" cx="32%" cy="26%" r="72%">
+            <stop offset="0%" stop-color="#ffffff" stop-opacity="0.58"></stop>
+            <stop offset="42%" stop-color="#ffffff" stop-opacity="0.13"></stop>
+            <stop offset="100%" stop-color="#ffffff" stop-opacity="0"></stop>
+          </radialGradient>
+          <radialGradient id="${horizonGlowId}" cx="50%" cy="100%" r="70%">
+            <stop offset="0%" stop-color="${gradientEnabled ? gradientTo : activeColor}" stop-opacity="0.95"></stop>
+            <stop offset="45%" stop-color="${gradientEnabled ? gradientFrom : activeColor}" stop-opacity="0.34"></stop>
+            <stop offset="100%" stop-color="${gradientEnabled ? gradientFrom : activeColor}" stop-opacity="0"></stop>
+          </radialGradient>
+          <filter id="${sunGlowId}" x="-100%" y="-100%" width="300%" height="300%">
+            <feGaussianBlur stdDeviation="${(2 + (glowOpacity * 5)).toFixed(2)}" result="blur"></feGaussianBlur>
+            <feMerge><feMergeNode in="blur"></feMergeNode><feMergeNode in="SourceGraphic"></feMergeNode></feMerge>
+          </filter>
+          <filter id="${horizonBlurId}" x="-30%" y="-160%" width="160%" height="320%">
+            <feGaussianBlur stdDeviation="7"></feGaussianBlur>
+          </filter>
+          <clipPath id="${horizonClipId}">
+            <rect x="0" y="0" width="340" height="${horizonY}"></rect>
+          </clipPath>
+        </defs>
+
+        <g class="sun-flow-data" style="display:${validDisplay}">
+          <g clip-path="url(#${horizonClipId})">
+            <ellipse cx="${centerX}" cy="${horizonY - 24}" rx="88" ry="30" fill="url(#${horizonGlowId})" opacity="${(glowOpacity * 0.96).toFixed(3)}" filter="url(#${horizonBlurId})"></ellipse>
+          </g>
+          <path d="${arcPath}" fill="none" stroke="${outlineColor}" stroke-width="${Math.max(0.8, arcWidth * 0.72)}" stroke-opacity="0.62" stroke-dasharray="5 6" stroke-linecap="round"></path>
+          <path d="${arcPath}" pathLength="100" fill="none" stroke="url(#${arcGradientId})" stroke-width="${arcWidth}" stroke-dasharray="${(progress * 100).toFixed(3)} 100" stroke-linecap="round"></path>
+          <path d="${tickPath}" fill="none" stroke="${scaleColor}" stroke-width="0.85" stroke-opacity="0.72" stroke-linecap="round" style="display:${this._config?.sunflow_show_scale !== false ? "inline" : "none"}"></path>
+          <line x1="16" y1="${horizonY}" x2="324" y2="${horizonY}" stroke="${outlineColor}" stroke-width="1.2" stroke-opacity="0.68"></line>
+
+          <circle cx="${leftX}" cy="${horizonY}" r="6.1" fill="none" stroke="${activeColor}" stroke-width="0.8" stroke-opacity="0.38"></circle>
+          <circle cx="${rightX}" cy="${horizonY}" r="6.1" fill="none" stroke="${activeColor}" stroke-width="0.8" stroke-opacity="0.38"></circle>
+          <circle cx="${leftX}" cy="${horizonY}" r="4.2" fill="none" stroke="${activeColor}" stroke-width="1.6"></circle>
+          <circle cx="${rightX}" cy="${horizonY}" r="4.2" fill="none" stroke="${activeColor}" stroke-width="1.6"></circle>
+
+          <g class="sun-flow-sun" style="display:${data.above ? "inline" : "none"}" filter="url(#${sunGlowId})">
+            <path d="${sunRayPath}" fill="none" stroke="${activeColor}" stroke-width="2.2" stroke-linecap="round" opacity="${(0.68 + (glowOpacity * 0.32)).toFixed(3)}"></path>
+            <circle cx="${sunX.toFixed(2)}" cy="${sunY.toFixed(2)}" r="${sunSize}" fill="url(#${sunGradientId})" stroke="${activeColor}" stroke-width="2"></circle>
+            <circle cx="${sunX.toFixed(2)}" cy="${sunY.toFixed(2)}" r="${sunSize}" fill="url(#${sunHighlightId})" stroke="none"></circle>
+          </g>
+
+          <g class="sun-flow-remaining" style="display:${this._config?.sunflow_show_remaining !== false ? "inline" : "none"}" fill="${activeColor}" stroke="${activeColor}">
+            <circle cx="${remainingDotX.toFixed(2)}" cy="${remainingY.toFixed(2)}" r="2.1" stroke="none"></circle>
+            <line x1="${remainingLineStartX.toFixed(2)}" y1="${remainingY.toFixed(2)}" x2="${remainingLineEndX.toFixed(2)}" y2="${remainingY.toFixed(2)}" stroke-width="1" stroke-opacity="0.78"></line>
+            <text x="${remainingTextX.toFixed(2)}" y="${(remainingY + 3.1).toFixed(2)}" fill="${activeColor}" stroke="rgba(0,0,0,0.72)" stroke-width="2.2" paint-order="stroke fill" font-size="${remainingFontSize.toFixed(2)}" font-weight="600" text-anchor="${remainingAnchor}">${remainingText}</text>
+          </g>
+
+          <g class="sun-flow-times" text-anchor="middle">
+            <g style="display:${this._config?.sunflow_show_sunrise !== false ? "inline" : "none"}">
+              <text x="48" y="153" fill="${activeColor}" font-size="${(22 * fontScale).toFixed(2)}" font-weight="650">${sunriseText}</text>
+              <text x="48" y="169" fill="${scaleColor}" font-size="${(8.6 * fontScale).toFixed(2)}" font-weight="500">${String(this._config?.sunflow_sunrise_label ?? "Sunrise")}</text>
+            </g>
+            <g style="display:${this._config?.sunflow_show_sunset !== false ? "inline" : "none"}">
+              <text x="292" y="153" fill="${activeColor}" font-size="${(22 * fontScale).toFixed(2)}" font-weight="650">${sunsetText}</text>
+              <text x="292" y="169" fill="${scaleColor}" font-size="${(8.6 * fontScale).toFixed(2)}" font-weight="500">${String(this._config?.sunflow_sunset_label ?? "Sunset")}</text>
+            </g>
+            <g style="display:${this._config?.sunflow_show_daylight !== false ? "inline" : "none"}">
+              <text x="170" y="143" fill="${scaleColor}" font-size="${(9.4 * fontScale).toFixed(2)}" font-weight="500">${String(this._config?.sunflow_daylight_label ?? "Daylight")}</text>
+              <text x="170" y="169" fill="${valueColor}" font-weight="600">
+                <tspan font-size="${(25 * fontScale).toFixed(2)}">${daylightParts.hours}</tspan>
+                <tspan font-size="${(9.5 * fontScale).toFixed(2)}"> ${hourLabel} </tspan>
+                <tspan font-size="${(25 * fontScale).toFixed(2)}">${String(daylightParts.minutes).padStart(2, "0")}</tspan>
+                <tspan font-size="${(9.5 * fontScale).toFixed(2)}"> ${minuteLabel}</tspan>
+              </text>
+            </g>
+            <text x="170" y="203" fill="${scaleColor}" font-size="${(8.8 * fontScale).toFixed(2)}" font-weight="500">${secondaryText}</text>
+          </g>
+        </g>
+
+        <g class="sun-flow-unavailable" style="display:${data.valid ? "none" : "inline"}">
+          <line x1="34" y1="116" x2="306" y2="116" stroke="${outlineColor}" stroke-width="1.2" stroke-opacity="0.55"></line>
+          <text x="170" y="106" fill="${scaleColor}" font-size="12" font-weight="500" text-anchor="middle">${String(this._config?.sunflow_unavailable_label ?? "Sun data unavailable")}</text>
+        </g>
+      </svg>
+    `;
+  }
+
+  _windDirectionSvg(opts) {
+    const { value, interval, glassOn } = opts;
+    const it = normalizeInterval(interval);
+    const useGradient = !!it.gradient?.enabled;
+    const dialFill = normalizeHex(it.color, "#22c55e");
+    const outline = normalizeHex(it.outline, "#ffffff");
+    const scaleColor = normalizeHex(it.scale_color, dialFill);
+    const gFrom = normalizeHex(it.gradient?.from, dialFill);
+    const gTo = normalizeHex(it.gradient?.to, gFrom);
+    const rawValue = Number.isFinite(Number(value)) ? Number(value) : 0;
+    const compassDeg = normalizeDegrees(rawValue);
+    const displayDeg = normalizeDegreesForDisplay(rawValue);
+    const decimals = Math.max(0, clampInt(this._config?.decimals ?? 0, 0, 6, 0));
+    const showCompassScale = (this._config?.show_scale === true || String(this._config?.show_scale).trim().toLowerCase() === "true");
+    const showDirectionMarkers = this._config?.wind_show_direction_markers !== false;
+    const outlineWidthRaw = Number(this._config?.wind_outline_width ?? 3.2);
+    const outlineWidth = Number.isFinite(outlineWidthRaw) ? clamp(outlineWidthRaw, 0, 16) : 3.2;
+    const arrowSizeRaw = Number(this._config?.wind_arrow_size ?? 82);
+    const arrowSize = Number.isFinite(arrowSizeRaw) ? clamp(arrowSizeRaw, 25, 100) : 82;
+    const arrowThicknessRaw = Number(this._config?.wind_arrow_thickness ?? 100);
+    const arrowThickness = Number.isFinite(arrowThicknessRaw) ? clamp(arrowThicknessRaw, 40, 200) : 100;
+    const arrowThicknessRatio = arrowThickness / 100;
+    const markerFontSizeRaw = Number(this._config?.wind_direction_marker_font_size ?? 15);
+    const markerFontSize = Number.isFinite(markerFontSizeRaw) ? clamp(markerFontSizeRaw, 8, 24) : 15;
+    const directionLabels = getWindDirectionLabels(this._config?.wind_direction_language, this.hass?.locale?.language);
+    const gaugeEnabled = this._config?.wind_gauge_enabled === true;
+    const gaugeShowValues = this._config?.wind_gauge_show_values !== false;
+    const gaugeShowScale = this._config?.wind_gauge_show_scale === true;
+    const gaugeSpeedEntity = String(this._config?.wind_gauge_speed_entity || "").trim();
+    const gaugeMaxEntity = String(this._config?.wind_gauge_max_entity || "").trim();
+    const gaugePosition = normalizeWindGaugePosition(this._config?.wind_gauge_position);
+    const gaugeMode = normalizeWindGaugeMode(this._config?.wind_gauge_mode);
+    const gaugeSingleMaxMarker = gaugeMode === "single_max_marker";
+    const gaugeMinRaw = Number(this._config?.wind_gauge_min ?? 0);
+    const gaugeMaxRaw = Number(this._config?.wind_gauge_max ?? 30);
+    const gaugeMin = Number.isFinite(gaugeMinRaw) ? gaugeMinRaw : 0;
+    const gaugeMax = Number.isFinite(gaugeMaxRaw) ? gaugeMaxRaw : 30;
+    const gaugeRange = (gaugeMax > gaugeMin) ? (gaugeMax - gaugeMin) : 1;
+    const gaugeDecimals = clampInt(this._config?.wind_gauge_decimals ?? 1, 0, 3, 1);
+    const gaugeOpacity = clamp(Number(this._config?.wind_gauge_opacity ?? 90), 0, 100) / 100;
+    const gaugeTrackOpacity = clamp(Number(this._config?.wind_gauge_track_opacity ?? 18), 0, 100) / 100;
+    const gaugeArcWidth = clamp(Number(this._config?.wind_gauge_arc_width ?? 5), 1, 12);
+    const gaugeInnerArcWidth = Math.max(1, gaugeArcWidth - 1);
+    const gaugeFontSize = clamp(Number(this._config?.wind_gauge_font_size ?? 8), 6, 14);
+    const gaugeSpeedLabel = String(this._config?.wind_gauge_speed_label ?? "Wind").trim();
+    const gaugeMaxLabel = String(this._config?.wind_gauge_max_label ?? "Max").trim();
+    const gaugeValueColor = normalizeHex(this._config?.wind_gauge_value_color, "#ffffff");
+    const gaugeSpeedValueRaw = gaugeEnabled && gaugeSpeedEntity ? this._getStateValue(gaugeSpeedEntity) : null;
+    const gaugeMaxValueRaw = gaugeEnabled && gaugeMaxEntity ? this._getStateValue(gaugeMaxEntity) : null;
+    const gaugeSpeedValue = (gaugeSpeedValueRaw == null) ? Number.NaN : Number(gaugeSpeedValueRaw);
+    const gaugeMaxValue = (gaugeMaxValueRaw == null) ? Number.NaN : Number(gaugeMaxValueRaw);
+    const gaugeSpeedValid = gaugeEnabled && Number.isFinite(gaugeSpeedValue);
+    const gaugeMaxValid = gaugeEnabled && Number.isFinite(gaugeMaxValue);
+    const gaugeHasValues = gaugeSpeedValid || gaugeMaxValid;
+    const gaugeIntervals = Array.isArray(this._config?.wind_gauge_intervals)
+      ? this._config.wind_gauge_intervals
+      : DEFAULT_WIND_GAUGE_INTERVALS;
+    const gaugeIntervalFor = (entityId, gaugeValue) => normalizeInterval(
+      this._findIntervalForStateOrValue(
+        gaugeValue,
+        entityId ? this.hass?.states?.[entityId]?.state : null,
+        gaugeIntervals
+      )
+    );
+    const gaugeSpeedInterval = gaugeIntervalFor(gaugeSpeedEntity, gaugeSpeedValue);
+    const gaugeMaxInterval = gaugeIntervalFor(gaugeMaxEntity, gaugeMaxValue);
+    const gaugeColorData = (gaugeInterval, fallback) => {
+      const activeColor = normalizeHex(gaugeInterval?.color, fallback);
+      const gradientEnabled = !!gaugeInterval?.gradient?.enabled;
+      const from = normalizeHex(gaugeInterval?.gradient?.from, activeColor);
+      const to = normalizeHex(gaugeInterval?.gradient?.to, from);
+      return { activeColor, from, to: gradientEnabled ? to : from };
+    };
+    const gaugeSpeedColors = gaugeColorData(gaugeSpeedInterval, "#22c55e");
+    const gaugeMaxColors = gaugeColorData(gaugeMaxInterval, "#f59e0b");
+    const gaugeProgress = (gaugeValue) => clamp01((gaugeValue - gaugeMin) / gaugeRange);
+    const dialFillStr = String(dialFill || "").trim();
+    const fillHasOwnAlpha = /^rgba/i.test(dialFillStr) || /^hsla/i.test(dialFillStr) || /^#(?:[0-9a-fA-F]{4}|[0-9a-fA-F]{8})$/.test(dialFillStr);
+    const dialOpacity = /^transparent$/i.test(dialFillStr) ? 1 : (fillHasOwnAlpha ? 1 : 0.16);
+    const outerLabelR = 98;
+    const ringInnerR = 78 - (outlineWidth / 2);
+    const tickOuterR = Math.max(56, ringInnerR - 4);
+    const tickCardinalInner = tickOuterR - 12;
+    const tickDiagonalInner = tickOuterR - 8;
+    const tickMinorInner = tickOuterR - 4;
+    const cx = 110;
+    const cy = 120;
+    const tickPath = (degrees, innerR) => degrees.map((tickDeg) => {
+      const rad = (tickDeg * Math.PI) / 180;
+      const x1 = cx + tickOuterR * Math.sin(rad);
+      const y1 = cy - tickOuterR * Math.cos(rad);
+      const x2 = cx + innerR * Math.sin(rad);
+      const y2 = cy - innerR * Math.cos(rad);
+      return `M ${x1.toFixed(2)} ${y1.toFixed(2)} L ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+    }).join(" ");
+    const cardinalTickPath = tickPath([0, 90, 180, 270], tickCardinalInner);
+    const diagonalTickPath = tickPath([45, 135, 225, 315], tickDiagonalInner);
+    const minorTickPath = tickPath(
+      Array.from({ length: 36 }, (_, idx) => idx * 10).filter((deg) => (deg % 90) !== 0),
+      tickMinorInner
+    );
+    const markerDiagonal = outerLabelR / Math.sqrt(2);
+    const markerLeft = (cx - markerDiagonal).toFixed(2);
+    const markerRight = (cx + markerDiagonal).toFixed(2);
+    const markerTop = (cy - markerDiagonal + 5).toFixed(2);
+    const markerBottom = (cy + markerDiagonal + 5).toFixed(2);
+    const gaugePoint = (radius, degrees) => {
+      const rad = (degrees * Math.PI) / 180;
+      return {
+        x: cx + (radius * Math.cos(rad)),
+        y: cy + (radius * Math.sin(rad)),
+      };
+    };
+    const gaugeReverseDirection = gaugePosition === "top" || gaugePosition === "left";
+    const gaugeDegreesForProgress = (progress) => gaugeReverseDirection
+      ? 35 + (110 * clamp01(progress))
+      : 145 - (110 * clamp01(progress));
+    const gaugeArcPath = (radius, progress) => {
+      const normalizedProgress = clamp01(progress);
+      if (normalizedProgress <= 0) return "";
+      const startDegrees = gaugeDegreesForProgress(0);
+      const endDegrees = gaugeDegreesForProgress(normalizedProgress);
+      const start = gaugePoint(radius, startDegrees);
+      const end = gaugePoint(radius, endDegrees);
+      const sweepFlag = gaugeReverseDirection ? 1 : 0;
+      return `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} A ${radius} ${radius} 0 0 ${sweepFlag} ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
+    };
+    const gaugeSpeedRadius = 60;
+    const gaugeMaxRadius = gaugeSingleMaxMarker ? gaugeSpeedRadius : (gaugeSpeedValid ? 51 : 60);
+    const gaugePrimaryVisible = gaugeSpeedValid || (gaugeSingleMaxMarker && gaugeMaxValid);
+    const gaugeSpeedTrackPath = gaugeArcPath(gaugeSpeedRadius, 1);
+    const gaugeMaxTrackPath = gaugeArcPath(gaugeMaxRadius, 1);
+    const gaugeSpeedPath = gaugeArcPath(gaugeSpeedRadius, gaugeSpeedValid ? gaugeProgress(gaugeSpeedValue) : 0);
+    const gaugeMaxPath = gaugeArcPath(gaugeMaxRadius, gaugeMaxValid ? gaugeProgress(gaugeMaxValue) : 0);
+    const gaugeMaxMarkerDegrees = gaugeDegreesForProgress(gaugeProgress(gaugeMaxValid ? gaugeMaxValue : gaugeMin));
+    const gaugeMaxMarkerInner = gaugePoint(gaugeSpeedRadius - (gaugeArcWidth / 2) - 2.5, gaugeMaxMarkerDegrees);
+    const gaugeMaxMarkerOuter = gaugePoint(gaugeSpeedRadius + (gaugeArcWidth / 2) + 2.5, gaugeMaxMarkerDegrees);
+    const gaugeRotation = ({ bottom: 0, top: 180, left: 90, right: -90 })[gaugePosition] ?? 0;
+    const gaugeScaleTickOuterRadius = gaugeSpeedRadius - (gaugeArcWidth / 2) - 1.5;
+    const gaugeScaleTickPath = [0, 0.25, 0.5, 0.75, 1].map((progress, index) => {
+      const degrees = gaugeDegreesForProgress(progress) + gaugeRotation;
+      const tickLength = (index === 0 || index === 2 || index === 4) ? 4 : 2.5;
+      const outerPoint = gaugePoint(gaugeScaleTickOuterRadius, degrees);
+      const innerPoint = gaugePoint(gaugeScaleTickOuterRadius - tickLength, degrees);
+      return `M ${outerPoint.x.toFixed(2)} ${outerPoint.y.toFixed(2)} L ${innerPoint.x.toFixed(2)} ${innerPoint.y.toFixed(2)}`;
+    }).join(" ");
+    const gaugeScaleLabelRadius = gaugeScaleTickOuterRadius - 8;
+    const gaugeScaleLabelPoint = (progress) => gaugePoint(
+      gaugeScaleLabelRadius,
+      gaugeDegreesForProgress(progress) + gaugeRotation
+    );
+    const gaugeScaleMinPoint = gaugeScaleLabelPoint(0);
+    const gaugeScaleMidPoint = gaugeScaleLabelPoint(0.5);
+    const gaugeScaleMaxPoint = gaugeScaleLabelPoint(1);
+    const gaugeScaleEnd = gaugeMin + gaugeRange;
+    const gaugeScaleNumber = (number) => fmtNumLocale(number, gaugeDecimals, this.hass?.locale?.language) ?? String(number);
+    const gaugeScaleMinText = gaugeScaleNumber(gaugeMin);
+    const gaugeScaleMidText = gaugeScaleNumber(gaugeMin + (gaugeRange / 2));
+    const gaugeScaleMaxText = gaugeScaleNumber(gaugeScaleEnd);
+    const gaugeScaleFontSize = clamp(gaugeFontSize * 0.68, 4.5, 7);
+    const gaugeTextLayout = {
+      bottom: { x: cx, y1: cy + 30, y2: cy + 40, anchor: "middle", fontScale: 1 },
+      top: { x: cx, y1: cy - 42, y2: cy - 30, anchor: "middle", fontScale: 1 },
+      left: { x: cx - 42, y1: cy - 4, y2: cy + 8, anchor: "middle", fontScale: 0.85 },
+      right: { x: cx + 42, y1: cy - 4, y2: cy + 8, anchor: "middle", fontScale: 0.85 },
+    }[gaugePosition];
+    const gaugeTextFontSize = gaugeFontSize * gaugeTextLayout.fontScale;
+    const gaugeValueText = (label, gaugeValue, entityId) => {
+      const shown = fmtNumLocale(gaugeValue, gaugeDecimals, this.hass?.locale?.language) ?? String(gaugeValue);
+      const unit = this._getUnitForEntity(entityId);
+      const prefix = label ? `${label.toUpperCase()} ` : "";
+      return `${prefix}${shown}${unit ? ` ${unit}` : ""}`;
+    };
+    const gaugeBothValid = gaugeSpeedValid && gaugeMaxValid;
+    const gaugeSingleTextY = (gaugeTextLayout.y1 + gaugeTextLayout.y2) / 2;
+    const gaugeSpeedTextY = gaugeBothValid ? gaugeTextLayout.y1 : gaugeSingleTextY;
+    const gaugeMaxTextY = gaugeBothValid ? gaugeTextLayout.y2 : gaugeSingleTextY;
+    const gaugeSpeedText = gaugeSpeedValid
+      ? gaugeValueText(gaugeSpeedLabel, gaugeSpeedValue, gaugeSpeedEntity)
+      : "";
+    const gaugeMaxText = gaugeMaxValid
+      ? gaugeValueText(gaugeMaxLabel, gaugeMaxValue, gaugeMaxEntity)
+      : "";
+
+    // Keep the arrow tip anchored near the scale/ring. Arrow size only moves
+    // the tail toward or away from the center.
+    const ringInnerTipR = clamp(ringInnerR - 2, 60, 75);
+    const arrowTipR = showCompassScale ? Math.max(56, tickMinorInner - 2) : ringInnerTipR;
+    const arrowRatio = arrowSize / 100;
+    const arrowTipY = cy - arrowTipR;
+    const arrowTailY = cy - (arrowTipR * (1 - arrowRatio));
+    const arrowHeadLength = 8 + (arrowSize * 0.12);
+    const arrowHeadHalfWidth = (4 + (arrowSize * 0.075)) * arrowThicknessRatio;
+    const arrowShaftHalfWidth = (1.8 + (arrowSize * 0.018)) * arrowThicknessRatio;
+    const arrowHeadBaseY = arrowTipY + arrowHeadLength;
+    const arrowPath = [
+      `M ${cx.toFixed(2)} ${arrowTipY.toFixed(2)}`,
+      `L ${(cx - arrowHeadHalfWidth).toFixed(2)} ${arrowHeadBaseY.toFixed(2)}`,
+      `L ${(cx - arrowShaftHalfWidth).toFixed(2)} ${arrowHeadBaseY.toFixed(2)}`,
+      `L ${(cx - arrowShaftHalfWidth).toFixed(2)} ${arrowTailY.toFixed(2)}`,
+      `L ${(cx + arrowShaftHalfWidth).toFixed(2)} ${arrowTailY.toFixed(2)}`,
+      `L ${(cx + arrowShaftHalfWidth).toFixed(2)} ${arrowHeadBaseY.toFixed(2)}`,
+      `L ${(cx + arrowHeadHalfWidth).toFixed(2)} ${arrowHeadBaseY.toFixed(2)}`,
+      "Z",
+    ].join(" ");
+    const gradId = `windDialGrad_${this._instanceId}`;
+    const shadowId = `windArrowShadow_${this._instanceId}`;
+    const sheenId = `windSheen_${this._instanceId}`;
+    const gaugeSpeedGradId = `windGaugeSpeed_${this._instanceId}`;
+    const gaugeMaxGradId = `windGaugeMax_${this._instanceId}`;
+    return html`
+      <svg class="sensor-svg wind-direction-svg" viewBox="0 0 220 230" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Wind direction">
+        <defs>
+          <linearGradient id="${gradId}" x1="0" x2="0" y1="1" y2="0">
+            <stop offset="0%" stop-color="${gFrom}"></stop>
+            <stop offset="100%" stop-color="${useGradient ? gTo : gFrom}"></stop>
+          </linearGradient>
+          <filter id="${shadowId}" x="-40%" y="-40%" width="180%" height="180%">
+            <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="rgba(0,0,0,0.26)"></feDropShadow>
+          </filter>
+          <linearGradient id="${sheenId}" x1="0" x2="1" y1="0" y2="1">
+            <stop offset="0%" stop-color="rgba(255,255,255,0.22)"></stop>
+            <stop offset="55%" stop-color="rgba(255,255,255,0.03)"></stop>
+            <stop offset="100%" stop-color="rgba(255,255,255,0.00)"></stop>
+          </linearGradient>
+          <linearGradient id="${gaugeSpeedGradId}" x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0%" stop-color="${gaugeReverseDirection ? gaugeSpeedColors.to : gaugeSpeedColors.from}"></stop>
+            <stop offset="100%" stop-color="${gaugeReverseDirection ? gaugeSpeedColors.from : gaugeSpeedColors.to}"></stop>
+          </linearGradient>
+          <linearGradient id="${gaugeMaxGradId}" x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0%" stop-color="${gaugeReverseDirection ? gaugeMaxColors.to : gaugeMaxColors.from}"></stop>
+            <stop offset="100%" stop-color="${gaugeReverseDirection ? gaugeMaxColors.from : gaugeMaxColors.to}"></stop>
+          </linearGradient>
+        </defs>
+
+        <circle
+          cx="${cx}" cy="${cy}" r="78"
+          fill="${useGradient ? `url(#${gradId})` : dialFill}"
+          fill-opacity="${dialOpacity}"
+          stroke="${outline}"
+          stroke-width="${outlineWidth}"
+        ></circle>
+
+        <path
+          d="M60 72 C82 50, 132 46, 162 72 C170 80, 174 92, 174 108"
+          fill="none"
+          stroke="url(#${sheenId})"
+          stroke-width="10"
+          stroke-linecap="round"
+          opacity="0.95"
+          style="display:${glassOn ? "inline" : "none"}"
+        ></path>
+
+        <g class="wind-gauge-layer" style="display:${gaugeHasValues ? "inline" : "none"}">
+          <g class="wind-gauge-arcs" transform="rotate(${gaugeRotation} ${cx} ${cy})" fill="none" stroke-linecap="round">
+            <g class="wind-gauge-speed" style="display:${gaugePrimaryVisible ? "inline" : "none"}">
+              <path d="${gaugeSpeedTrackPath}" stroke="${scaleColor}" stroke-width="${gaugeArcWidth}" stroke-opacity="${gaugeTrackOpacity}"></path>
+              <path d="${gaugeSpeedPath}" stroke="url(#${gaugeSpeedGradId})" stroke-width="${gaugeArcWidth}" stroke-opacity="${gaugeOpacity}"></path>
+            </g>
+            <g class="wind-gauge-max" style="display:${!gaugeSingleMaxMarker && gaugeMaxValid ? "inline" : "none"}">
+              <path d="${gaugeMaxTrackPath}" stroke="${scaleColor}" stroke-width="${gaugeInnerArcWidth}" stroke-opacity="${gaugeTrackOpacity}"></path>
+              <path d="${gaugeMaxPath}" stroke="url(#${gaugeMaxGradId})" stroke-width="${gaugeInnerArcWidth}" stroke-opacity="${gaugeOpacity}"></path>
+            </g>
+            <g class="wind-gauge-max-marker" style="display:${gaugeSingleMaxMarker && gaugeMaxValid ? "inline" : "none"}">
+              <line
+                x1="${gaugeMaxMarkerInner.x.toFixed(2)}" y1="${gaugeMaxMarkerInner.y.toFixed(2)}"
+                x2="${gaugeMaxMarkerOuter.x.toFixed(2)}" y2="${gaugeMaxMarkerOuter.y.toFixed(2)}"
+                stroke="${gaugeMaxColors.activeColor}" stroke-width="1.5" stroke-opacity="${gaugeOpacity}" stroke-linecap="round"
+              ></line>
+            </g>
+          </g>
+          <g
+            class="wind-gauge-scale"
+            style="display:${gaugeShowScale ? "inline" : "none"}"
+            fill="${gaugeValueColor}"
+            stroke="${gaugeValueColor}"
+            opacity="0.82"
+          >
+            <path d="${gaugeScaleTickPath}" fill="none" stroke-width="0.75" stroke-linecap="round"></path>
+            <g
+              stroke="rgba(0,0,0,0.66)"
+              stroke-width="1.2"
+              paint-order="stroke fill"
+              font-size="${gaugeScaleFontSize}"
+              font-weight="700"
+              text-anchor="middle"
+              dominant-baseline="central"
+            >
+              <text x="${gaugeScaleMinPoint.x.toFixed(2)}" y="${gaugeScaleMinPoint.y.toFixed(2)}">${gaugeScaleMinText}</text>
+              <text x="${gaugeScaleMidPoint.x.toFixed(2)}" y="${gaugeScaleMidPoint.y.toFixed(2)}">${gaugeScaleMidText}</text>
+              <text x="${gaugeScaleMaxPoint.x.toFixed(2)}" y="${gaugeScaleMaxPoint.y.toFixed(2)}">${gaugeScaleMaxText}</text>
+            </g>
+          </g>
+          <g
+            class="wind-gauge-values"
+            style="display:${gaugeShowValues ? "inline" : "none"}"
+            font-size="${gaugeTextFontSize}"
+            font-weight="750"
+            text-anchor="${gaugeTextLayout.anchor}"
+          >
+            <text
+              class="wind-gauge-speed-value"
+              x="${gaugeTextLayout.x}"
+              y="${gaugeSpeedTextY}"
+              fill="${gaugeValueColor}"
+              fill-opacity="${gaugeOpacity}"
+              stroke="rgba(0,0,0,0.62)"
+              stroke-width="1.8"
+              stroke-opacity="0.72"
+              paint-order="stroke fill"
+              style="display:${gaugeSpeedValid ? "inline" : "none"}"
+            >${gaugeSpeedText}</text>
+            <text
+              class="wind-gauge-max-value"
+              x="${gaugeTextLayout.x}"
+              y="${gaugeMaxTextY}"
+              fill="${gaugeValueColor}"
+              fill-opacity="${gaugeOpacity}"
+              stroke="rgba(0,0,0,0.62)"
+              stroke-width="1.8"
+              stroke-opacity="0.72"
+              paint-order="stroke fill"
+              style="display:${gaugeMaxValid ? "inline" : "none"}"
+            >${gaugeMaxText}</text>
+          </g>
+        </g>
+
+        <g class="wind-compass-scale" style="display:${showCompassScale ? "inline" : "none"}">
+          <path d="${minorTickPath}" fill="none" stroke="${scaleColor}" stroke-width="0.85" stroke-linecap="round" stroke-opacity="0.58"></path>
+          <path d="${diagonalTickPath}" fill="none" stroke="${scaleColor}" stroke-width="1.25" stroke-linecap="round" stroke-opacity="0.82"></path>
+          <path d="${cardinalTickPath}" fill="none" stroke="${scaleColor}" stroke-width="1.8" stroke-linecap="round" stroke-opacity="0.94"></path>
+        </g>
+
+        <g class="wind-direction-markers" style="display:${showDirectionMarkers ? "inline" : "none"}" fill="${scaleColor}" fill-opacity="0.90" font-size="${markerFontSize}" font-weight="700" text-anchor="middle">
+          <text x="${cx}" y="${cy - outerLabelR + 5}">${directionLabels[0]}</text>
+          <text x="${markerRight}" y="${markerTop}">${directionLabels[1]}</text>
+          <text x="${cx + outerLabelR}" y="${cy + 5}">${directionLabels[2]}</text>
+          <text x="${markerRight}" y="${markerBottom}">${directionLabels[3]}</text>
+          <text x="${cx}" y="${cy + outerLabelR + 5}">${directionLabels[4]}</text>
+          <text x="${markerLeft}" y="${markerBottom}">${directionLabels[5]}</text>
+          <text x="${cx - outerLabelR}" y="${cy + 5}">${directionLabels[6]}</text>
+          <text x="${markerLeft}" y="${markerTop}">${directionLabels[7]}</text>
+        </g>
+
+        <g transform="rotate(${compassDeg} ${cx} ${cy})" filter="url(#${shadowId})">
+          <path d="${arrowPath}" fill="${scaleColor}" fill-opacity="0.98"></path>
+        </g>
+
+      </svg>
+    `;
   }
 
   // ---------------------------
@@ -8000,6 +9070,55 @@ _waterLevelSegmentsSvg(opts) {
         display:block;
         overflow:visible;
       }
+      .sensor-svg.wind-direction-svg {
+        width: calc(190px * var(--asc-scale, 1));
+        height: calc(190px * var(--asc-scale, 1));
+      }
+      .sensor-svg.sun-flow-svg {
+        width: calc(340px * var(--asc-scale, 1));
+        height: calc(230px * var(--asc-scale, 1));
+        max-width: 100%;
+      }
+      .windCenterOverlay{
+        position:absolute;
+        left:50%;
+        top:50%;
+        transform:translate(-50%, -36%);
+        display:flex;
+        flex-direction:column;
+        align-items:center;
+        justify-content:center;
+        gap: 4px;
+        pointer-events:none;
+        z-index:4;
+        text-align:center;
+      }
+      .windCenterOverlay .deg{
+        color: var(--primary-text-color, #ffffff);
+        font-weight: 850;
+        line-height: 1;
+        text-shadow: 0 2px 8px rgba(0,0,0,0.45);
+      }
+      .windCenterOverlay .dir{
+        color: var(--primary-text-color, #ffffff);
+        font-weight: 700;
+        line-height: 1;
+        text-shadow: 0 2px 8px rgba(0,0,0,0.45);
+      }
+      .windCenterOverlay .deg.outlined,
+      .windCenterOverlay .dir.outlined{
+        color: #fff;
+        text-shadow:
+          1px 0 0 rgba(0,0,0,0.95),
+          -1px 0 0 rgba(0,0,0,0.95),
+          0 1px 0 rgba(0,0,0,0.95),
+          0 -1px 0 rgba(0,0,0,0.95),
+          1px 1px 0 rgba(0,0,0,0.90),
+          -1px 1px 0 rgba(0,0,0,0.90),
+          1px -1px 0 rgba(0,0,0,0.90),
+          -1px -1px 0 rgba(0,0,0,0.90),
+          0 2px 10px rgba(0,0,0,0.55);
+      }
 
       /* Image symbol */
       .asc-image-box{
@@ -8660,7 +9779,7 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: CARD_TAG,
   name: "Andy Sensor Card",
-  description: "Multi-symbol sensor card (battery liquid + battery segments + split battery + tanks + water level + fan). Intervals control colors and segment blocks. Unique SVG defs prevent gradient/clip collisions.",
+  description: "Multi-symbol sensor card with batteries, tanks, fan, doors, images and wind direction. Intervals control colors and segment blocks. Unique SVG defs prevent gradient/clip collisions.",
 });
 
 /* =============================================================================
@@ -8718,6 +9837,64 @@ const DEFAULTS = {
   image_dim_off: false,
   image_dim_off_opacity: 0.45,
   show_scale: false,
+  wind_show_degrees: true,
+  wind_show_direction: true,
+  wind_show_direction_markers: true,
+  wind_direction_language: "auto",
+  wind_degree_font_size: 0,
+  wind_direction_font_size: 0,
+  wind_direction_marker_font_size: 15,
+  wind_outline_width: 3.2,
+  wind_arrow_size: 82,
+  wind_arrow_thickness: 100,
+  wind_gauge_enabled: false,
+  wind_gauge_show_values: true,
+  wind_gauge_show_scale: false,
+  wind_gauge_speed_entity: "",
+  wind_gauge_max_entity: "",
+  wind_gauge_position: "bottom",
+  wind_gauge_mode: "dual",
+  wind_gauge_speed_label: "Wind",
+  wind_gauge_max_label: "Max",
+  wind_gauge_value_color: "#ffffff",
+  wind_gauge_min: 0,
+  wind_gauge_max: 30,
+  wind_gauge_decimals: 1,
+  wind_gauge_opacity: 90,
+  wind_gauge_track_opacity: 18,
+  wind_gauge_arc_width: 5,
+  wind_gauge_font_size: 8,
+  wind_gauge_intervals: deepClone(DEFAULT_WIND_GAUGE_INTERVALS).map(normalizeInterval),
+  sunflow_sun_entity: "",
+  sunflow_sunrise_entity: "",
+  sunflow_sunset_entity: "",
+  sunflow_elevation_entity: "",
+  sunflow_azimuth_entity: "",
+  sunflow_rising_entity: "",
+  sunflow_show_sunrise: true,
+  sunflow_show_sunset: true,
+  sunflow_show_daylight: true,
+  sunflow_show_now: true,
+  sunflow_show_elevation: true,
+  sunflow_show_azimuth: false,
+  sunflow_show_remaining: true,
+  sunflow_show_scale: true,
+  sunflow_sunrise_label: "Sunrise",
+  sunflow_sunset_label: "Sunset",
+  sunflow_daylight_label: "Daylight",
+  sunflow_now_label: "Now",
+  sunflow_elevation_label: "Elevation",
+  sunflow_azimuth_label: "Azimuth",
+  sunflow_remaining_label: "remaining",
+  sunflow_until_sunrise_label: "until sunrise",
+  sunflow_hours_label: "h",
+  sunflow_minutes_label: "min",
+  sunflow_unavailable_label: "Sun data unavailable",
+  sunflow_glow_strength: 85,
+  sunflow_sun_size: 14,
+  sunflow_arc_width: 2.5,
+  sunflow_font_scale: 100,
+  sunflow_value_color: "#ffffff",
   scale_color_mode: "per_interval",
   show_stats: false,
   stats_hours: 24,
@@ -8744,6 +9921,55 @@ class AndySensorCardEditor extends HTMLElement {
     incomingRaw.tap_confirm_open = !!incomingRaw.tap_confirm_open;
     incomingRaw.tap_confirm_open_anywhere = !!incomingRaw.tap_confirm_open_anywhere;
     incomingRaw.fan_show_frame = !!incomingRaw.fan_show_frame;
+    incomingRaw.wind_show_degrees = (incomingRaw.wind_show_degrees == null) ? true : !!incomingRaw.wind_show_degrees;
+    incomingRaw.wind_show_direction = (incomingRaw.wind_show_direction == null) ? true : !!incomingRaw.wind_show_direction;
+    incomingRaw.wind_show_direction_markers = (incomingRaw.wind_show_direction_markers == null) ? true : !!incomingRaw.wind_show_direction_markers;
+    incomingRaw.wind_direction_language = normalizeWindDirectionLanguage(incomingRaw.wind_direction_language);
+    incomingRaw.wind_gauge_enabled = !!incomingRaw.wind_gauge_enabled;
+    incomingRaw.wind_gauge_show_values = (incomingRaw.wind_gauge_show_values == null) ? true : !!incomingRaw.wind_gauge_show_values;
+    incomingRaw.wind_gauge_show_scale = !!incomingRaw.wind_gauge_show_scale;
+    incomingRaw.wind_gauge_speed_entity = String(incomingRaw.wind_gauge_speed_entity || "").trim();
+    incomingRaw.wind_gauge_max_entity = String(incomingRaw.wind_gauge_max_entity || "").trim();
+    incomingRaw.wind_gauge_position = normalizeWindGaugePosition(incomingRaw.wind_gauge_position);
+    incomingRaw.wind_gauge_mode = normalizeWindGaugeMode(incomingRaw.wind_gauge_mode);
+    incomingRaw.wind_gauge_speed_label = String(incomingRaw.wind_gauge_speed_label ?? "Wind").trim();
+    incomingRaw.wind_gauge_max_label = String(incomingRaw.wind_gauge_max_label ?? "Max").trim();
+    incomingRaw.wind_gauge_value_color = normalizeHex(incomingRaw.wind_gauge_value_color, "#ffffff");
+    [
+      "sunflow_sun_entity",
+      "sunflow_sunrise_entity",
+      "sunflow_sunset_entity",
+      "sunflow_elevation_entity",
+      "sunflow_azimuth_entity",
+      "sunflow_rising_entity",
+    ].forEach((key) => { incomingRaw[key] = String(incomingRaw[key] || "").trim(); });
+    [
+      "sunflow_show_sunrise",
+      "sunflow_show_sunset",
+      "sunflow_show_daylight",
+      "sunflow_show_now",
+      "sunflow_show_elevation",
+      "sunflow_show_remaining",
+      "sunflow_show_scale",
+    ].forEach((key) => { incomingRaw[key] = incomingRaw[key] !== false; });
+    incomingRaw.sunflow_show_azimuth = incomingRaw.sunflow_show_azimuth === true;
+    const sunFlowLabels = {
+      sunflow_sunrise_label: "Sunrise",
+      sunflow_sunset_label: "Sunset",
+      sunflow_daylight_label: "Daylight",
+      sunflow_now_label: "Now",
+      sunflow_elevation_label: "Elevation",
+      sunflow_azimuth_label: "Azimuth",
+      sunflow_remaining_label: "remaining",
+      sunflow_until_sunrise_label: "until sunrise",
+      sunflow_hours_label: "h",
+      sunflow_minutes_label: "min",
+      sunflow_unavailable_label: "Sun data unavailable",
+    };
+    Object.entries(sunFlowLabels).forEach(([key, fallback]) => {
+      incomingRaw[key] = String(incomingRaw[key] ?? fallback);
+    });
+    incomingRaw.sunflow_value_color = normalizeHex(incomingRaw.sunflow_value_color, "#ffffff");
 
 
     incomingRaw.fan_blade_count = clampInt(incomingRaw.fan_blade_count ?? 3, 2, 8, 3);
@@ -8766,6 +9992,8 @@ incomingRaw.symbol =
   (sym === "garage_door") ? "garage_door" :
   (sym === "blind") ? "blind" :
   (sym === "window") ? "window" :
+  (sym === "wind_direction") ? "wind_direction" :
+  (sym === "sun_flow") ? "sun_flow" :
   (sym === "gate") ? "gate" :
   (sym === "image") ? "image" :
   (sym === "battery_liquid_modern") ? "battery_liquid_modern" :
@@ -8780,8 +10008,55 @@ incomingRaw.symbol =
     if (typeof incomingRaw.image_url !== "string") incomingRaw.image_url = "";
     incomingRaw.image_url = String(incomingRaw.image_url || "").trim();
 
+    {
+      const degreeFs = Number(incomingRaw.wind_degree_font_size ?? 0);
+      incomingRaw.wind_degree_font_size = (Number.isFinite(degreeFs) && degreeFs >= 0) ? degreeFs : 0;
+      const directionFs = Number(incomingRaw.wind_direction_font_size ?? 0);
+      incomingRaw.wind_direction_font_size = (Number.isFinite(directionFs) && directionFs >= 0) ? directionFs : 0;
+      const markerFs = Number(incomingRaw.wind_direction_marker_font_size ?? 15);
+      incomingRaw.wind_direction_marker_font_size = Number.isFinite(markerFs) ? clamp(markerFs, 8, 24) : 15;
+      const outlineWidth = Number(incomingRaw.wind_outline_width ?? 3.2);
+      incomingRaw.wind_outline_width = Number.isFinite(outlineWidth) ? clamp(outlineWidth, 0, 16) : 3.2;
+      const arrowSize = Number(incomingRaw.wind_arrow_size ?? 82);
+      incomingRaw.wind_arrow_size = Number.isFinite(arrowSize) ? clamp(arrowSize, 25, 100) : 82;
+      const arrowThickness = Number(incomingRaw.wind_arrow_thickness ?? 100);
+      incomingRaw.wind_arrow_thickness = Number.isFinite(arrowThickness) ? clamp(arrowThickness, 40, 200) : 100;
+      const gaugeMin = Number(incomingRaw.wind_gauge_min ?? 0);
+      incomingRaw.wind_gauge_min = Number.isFinite(gaugeMin) ? gaugeMin : 0;
+      const gaugeMax = Number(incomingRaw.wind_gauge_max ?? 30);
+      incomingRaw.wind_gauge_max = Number.isFinite(gaugeMax) ? gaugeMax : 30;
+      incomingRaw.wind_gauge_decimals = clampInt(incomingRaw.wind_gauge_decimals ?? 1, 0, 3, 1);
+      const gaugeOpacity = Number(incomingRaw.wind_gauge_opacity ?? 90);
+      incomingRaw.wind_gauge_opacity = Number.isFinite(gaugeOpacity) ? clamp(gaugeOpacity, 0, 100) : 90;
+      const gaugeTrackOpacity = Number(incomingRaw.wind_gauge_track_opacity ?? 18);
+      incomingRaw.wind_gauge_track_opacity = Number.isFinite(gaugeTrackOpacity) ? clamp(gaugeTrackOpacity, 0, 100) : 18;
+      const gaugeArcWidth = Number(incomingRaw.wind_gauge_arc_width ?? 5);
+      incomingRaw.wind_gauge_arc_width = Number.isFinite(gaugeArcWidth) ? clamp(gaugeArcWidth, 1, 12) : 5;
+      const gaugeFontSize = Number(incomingRaw.wind_gauge_font_size ?? 8);
+      incomingRaw.wind_gauge_font_size = Number.isFinite(gaugeFontSize) ? clamp(gaugeFontSize, 6, 14) : 8;
+      const sunGlowStrength = Number(incomingRaw.sunflow_glow_strength ?? 85);
+      incomingRaw.sunflow_glow_strength = Number.isFinite(sunGlowStrength) ? clamp(sunGlowStrength, 0, 100) : 85;
+      const sunSize = Number(incomingRaw.sunflow_sun_size ?? 14);
+      incomingRaw.sunflow_sun_size = Number.isFinite(sunSize) ? clamp(sunSize, 7, 26) : 14;
+      const sunArcWidth = Number(incomingRaw.sunflow_arc_width ?? 2.5);
+      incomingRaw.sunflow_arc_width = Number.isFinite(sunArcWidth) ? clamp(sunArcWidth, 0.5, 10) : 2.5;
+      const sunFontScale = Number(incomingRaw.sunflow_font_scale ?? 100);
+      incomingRaw.sunflow_font_scale = Number.isFinite(sunFontScale) ? clamp(sunFontScale, 60, 160) : 100;
+    }
+
     if (typeof incomingRaw.image_media !== "string") incomingRaw.image_media = "";
     incomingRaw.image_media = String(incomingRaw.image_media || "").trim();
+
+    if (incomingRaw.symbol === "wind_direction") {
+      if (!(config && Object.prototype.hasOwnProperty.call(config, "min"))) incomingRaw.min = 0;
+      if (!(config && Object.prototype.hasOwnProperty.call(config, "max"))) incomingRaw.max = 360;
+      if (!(config && Object.prototype.hasOwnProperty.call(config, "show_scale"))) incomingRaw.show_scale = true;
+      if (!(config && Object.prototype.hasOwnProperty.call(config, "value_position"))) incomingRaw.value_position = "hide";
+    }
+    if (incomingRaw.symbol === "sun_flow" && !(config && Object.prototype.hasOwnProperty.call(config, "value_position"))) {
+      incomingRaw.value_position = "hide";
+    }
+    incomingRaw.show_scale = (incomingRaw.show_scale === true || String(incomingRaw.show_scale).trim().toLowerCase() === "true");
 
     const fit = String(incomingRaw.image_fit || "cover").trim().toLowerCase();
     incomingRaw.image_fit = (fit === "contain") ? "contain" : "cover";
@@ -8828,6 +10103,10 @@ incomingRaw.symbol =
 
     if (!Array.isArray(incomingRaw.intervals) || incomingRaw.intervals.length === 0) incomingRaw.intervals = deepClone(DEFAULT_INTERVALS);
     incomingRaw.intervals = incomingRaw.intervals.map(normalizeInterval);
+    if (!Array.isArray(incomingRaw.wind_gauge_intervals) || incomingRaw.wind_gauge_intervals.length === 0) {
+      incomingRaw.wind_gauge_intervals = deepClone(DEFAULT_WIND_GAUGE_INTERVALS);
+    }
+    incomingRaw.wind_gauge_intervals = incomingRaw.wind_gauge_intervals.map(normalizeInterval);
     if (!Array.isArray(incomingRaw.badges)) incomingRaw.badges = [];
     incomingRaw.badges = incomingRaw.badges.map(normalizeBadge);
 
@@ -8843,10 +10122,11 @@ incomingRaw.symbol =
   set hass(hass) {
     this._hass = hass;
     const isEditing = !!this._isEditing;
+    const domRoot = this;
 
     // Keep entity pickers connected to hass, but skip full sync while typing.
     try {
-      this.querySelectorAll("ha-selector").forEach((el) => {
+      domRoot.querySelectorAll("ha-selector").forEach((el) => {
         el.hass = this._hass;
       });
     } catch (_) {}
@@ -8858,6 +10138,14 @@ incomingRaw.symbol =
     if (this._built && this._config && !isEditing) {
       try { this._sync(); } catch (e) {}
     }
+  }
+
+  _decorateEditorFieldLabels(container) {
+    return;
+  }
+
+  _decorateColorRows(container) {
+    return;
   }
 
   _buildOnce() {
@@ -8907,7 +10195,7 @@ const stopBubble = (e) => {
     const root = document.createElement("div");
     root.className = "form";
 
-    // Robust focus tracking: focus can live inside shadow roots (ha-textfield),
+    // Robust focus tracking: focus can live inside HA input shadow roots,
     // so `document.activeElement` checks are not enough. We track focusin/out
     // at the editor root to decide if we may safely `_sync()`.
     this._isEditing = false;
@@ -8931,7 +10219,7 @@ const stopBubble = (e) => {
     root.addEventListener("focusout", unmarkEditingSoon, true);
 
     const mkText = (label, key, type = "text", placeholder = "") => {
-      const tf = document.createElement("ha-textfield");
+      const tf = createEditorInput();
       tf.label = label;
       tf.type = type;
       tf.placeholder = placeholder;
@@ -8953,7 +10241,7 @@ const stopBubble = (e) => {
       btn.className = "colorBtn";
 
       const cur = normalizeHex(String((this._config || {})[key] ?? ""), fallback);
-      try { btn.value = String(cur).slice(0, 7); } catch(e) {}
+      try { btn.value = toPickerHex(cur, fallback); } catch(e) {}
 
       btn.addEventListener("input", (e) => {
         stopBubble(e);
@@ -8967,7 +10255,7 @@ const stopBubble = (e) => {
         stopBubble(e);
         const v = normalizeHex(String(tf.value || ""), fallback);
         tf.value = v;
-        try { btn.value = v.slice(0, 7); } catch(_) {}
+        try { btn.value = toPickerHex(v, fallback); } catch(_) {}
         this._commit(key, v);
       });
       tf.addEventListener("click", stopBubble);
@@ -9076,6 +10364,12 @@ const stopBubble = (e) => {
 
       return sel;
     };
+
+    // Badge drafts are rendered by a separate class method. Preserve these
+    // helpers on the editor instance instead of relying on local scope.
+    this._mkSelectControl = mkSelectControl;
+    this._setSelectControlOptions = setSelectControlOptions;
+    this._setSelectControlValue = setSelectControlValue;
 
     const mkSelect = (label, key, options) =>
       mkSelectControl({
@@ -9222,7 +10516,7 @@ const stopBubble = (e) => {
     svcRowMain.appendChild(svcPickerMain);
     this._rowMainSvc.appendChild(svcRowMain);
 
-    const tfSvcMain = document.createElement("ha-textfield");
+    const tfSvcMain = createEditorInput();
     tfSvcMain.label = "Service (domain.service)";
     tfSvcMain.value = this._config?.tap_action_service || "";
     tfSvcMain.addEventListener("input", (e) => {
@@ -9233,7 +10527,7 @@ const stopBubble = (e) => {
     tfSvcMain.addEventListener("click", stopBubble);
     this._rowMainSvc.appendChild(tfSvcMain);
 
-    const tfDataMain = document.createElement("ha-textfield");
+    const tfDataMain = createEditorInput();
     tfDataMain.label = "Service data (optional JSON)";
     tfDataMain.value = (typeof this._config?.tap_action_service_data === "string")
       ? this._config.tap_action_service_data
@@ -9273,7 +10567,7 @@ const stopBubble = (e) => {
     this._swTapConfirmOpen.addEventListener("value-changed", (e) => this._onChange(e));
     ffConfirm.appendChild(this._swTapConfirmOpen);
 
-    this._tfTapConfirmOpenWindow = document.createElement("ha-textfield");
+    this._tfTapConfirmOpenWindow = createEditorInput();
     this._tfTapConfirmOpenWindow.label = "Confirm state in (seconds)";
     this._tfTapConfirmOpenWindow.type = "number";
     this._tfTapConfirmOpenWindow.min = "1";
@@ -9356,6 +10650,8 @@ const rowSym = document.createElement("div");
       ["garage_door", "Garage door"], //v1.6.15
       ["blind", "Blind"], //v1.6.26
       ["window", "Window"], //v1.6.XX
+      ["wind_direction", "Wind direction"], //v1.0.7.3
+      ["sun_flow", "SunFlow"],
       ["gate", "Gate"], //v1.6.30
       ["image", "Image"], //v1.6.38
       ["gas_cylinder", "Gas cylinder"], //v1.0.2
@@ -9428,6 +10724,396 @@ const row2 = document.createElement("div");
     spacerNF.style.visibility = "hidden";
     rowNameFont.appendChild(spacerNF);
     root.appendChild(rowNameFont);
+
+    const rowWindToggles = document.createElement("div");
+    rowWindToggles.className = "grid3";
+    const { wrap: swWindDegreesWrap, sw: swWindDegrees } = mkSwitch("Show degree value", "wind_show_degrees");
+    const { wrap: swWindDirectionWrap, sw: swWindDirection } = mkSwitch("Show direction value", "wind_show_direction");
+    const { wrap: swWindMarkersWrap, sw: swWindMarkers } = mkSwitch("Show direction markers", "wind_show_direction_markers");
+    this._rowWindToggles = rowWindToggles;
+    this._swWindDegrees = swWindDegrees;
+    this._swWindDirection = swWindDirection;
+    this._swWindMarkers = swWindMarkers;
+    rowWindToggles.appendChild(swWindDegreesWrap);
+    rowWindToggles.appendChild(swWindDirectionWrap);
+    rowWindToggles.appendChild(swWindMarkersWrap);
+    root.appendChild(rowWindToggles);
+
+    const rowWindLanguage = document.createElement("div");
+    rowWindLanguage.className = "grid1";
+    this._elWindDirectionLanguage = mkSelect("Direction labels language", "wind_direction_language", [
+      ["auto", "Auto (Home Assistant language)"],
+      ["sv", "Swedish"],
+      ["en", "English"],
+      ["da", "Danish"],
+      ["no", "Norwegian"],
+      ["fi", "Finnish"],
+      ["de", "German"],
+      ["nl", "Dutch"],
+      ["fr", "French"],
+      ["es", "Spanish"],
+      ["it", "Italian"],
+      ["pt", "Portuguese"],
+      ["pt-br", "Portuguese (Brazil)"],
+    ]);
+    this._rowWindLanguage = rowWindLanguage;
+    rowWindLanguage.appendChild(this._elWindDirectionLanguage);
+    root.appendChild(rowWindLanguage);
+
+    const rowWindFonts = document.createElement("div");
+    rowWindFonts.className = "grid3";
+    this._elWindDegreeFont = mkText("Degree font size (px) - 0 = auto", "wind_degree_font_size", "number", "0");
+    this._elWindDirectionFont = mkText("Direction font size (px) - 0 = auto", "wind_direction_font_size", "number", "0");
+    this._elWindMarkerFont = mkText("Direction marker font size (px)", "wind_direction_marker_font_size", "number", "15");
+    this._elWindMarkerFont.min = "8";
+    this._elWindMarkerFont.max = "24";
+    this._elWindMarkerFont.step = "1";
+    this._rowWindFonts = rowWindFonts;
+    rowWindFonts.appendChild(this._elWindDegreeFont);
+    rowWindFonts.appendChild(this._elWindDirectionFont);
+    rowWindFonts.appendChild(this._elWindMarkerFont);
+    root.appendChild(rowWindFonts);
+
+    const rowWindShape = document.createElement("div");
+    rowWindShape.className = "grid3";
+    this._elWindOutlineWidth = mkText("Compass outline width (0-16)", "wind_outline_width", "number", "3.2");
+    this._elWindOutlineWidth.min = "0";
+    this._elWindOutlineWidth.max = "16";
+    this._elWindOutlineWidth.step = "0.2";
+    this._elWindArrowSize = mkText("Wind arrow size (%)", "wind_arrow_size", "number", "82");
+    this._elWindArrowSize.min = "25";
+    this._elWindArrowSize.max = "100";
+    this._elWindArrowSize.step = "1";
+    this._elWindArrowThickness = mkText("Wind arrow thickness (%)", "wind_arrow_thickness", "number", "100");
+    this._elWindArrowThickness.min = "40";
+    this._elWindArrowThickness.max = "200";
+    this._elWindArrowThickness.step = "5";
+    this._rowWindShape = rowWindShape;
+    rowWindShape.appendChild(this._elWindOutlineWidth);
+    rowWindShape.appendChild(this._elWindArrowSize);
+    rowWindShape.appendChild(this._elWindArrowThickness);
+    root.appendChild(rowWindShape);
+
+    const windGaugeTitle = document.createElement("div");
+    windGaugeTitle.className = "section-title";
+    windGaugeTitle.textContent = "Wind gauges";
+    this._rowWindGaugeTitle = windGaugeTitle;
+    root.appendChild(windGaugeTitle);
+
+    const rowWindGaugeToggles = document.createElement("div");
+    rowWindGaugeToggles.className = "grid3";
+    const { wrap: swWindGaugeEnabledWrap, sw: swWindGaugeEnabled } = mkSwitch("Show wind gauges", "wind_gauge_enabled");
+    const { wrap: swWindGaugeValuesWrap, sw: swWindGaugeValues } = mkSwitch("Show gauge values", "wind_gauge_show_values");
+    const { wrap: swWindGaugeScaleWrap, sw: swWindGaugeScale } = mkSwitch("Show gauge scale", "wind_gauge_show_scale");
+    this._rowWindGaugeToggles = rowWindGaugeToggles;
+    this._swWindGaugeEnabled = swWindGaugeEnabled;
+    this._swWindGaugeValues = swWindGaugeValues;
+    this._swWindGaugeScale = swWindGaugeScale;
+    rowWindGaugeToggles.appendChild(swWindGaugeEnabledWrap);
+    rowWindGaugeToggles.appendChild(swWindGaugeValuesWrap);
+    rowWindGaugeToggles.appendChild(swWindGaugeScaleWrap);
+    root.appendChild(rowWindGaugeToggles);
+
+    const rowWindGaugeEntities = document.createElement("div");
+    rowWindGaugeEntities.className = "grid2";
+    this._elWindGaugeSpeedEntity = mkEntityControl("Current wind speed entity", "wind_gauge_speed_entity");
+    this._elWindGaugeMaxEntity = mkEntityControl("Maximum wind speed entity", "wind_gauge_max_entity");
+    this._rowWindGaugeEntities = rowWindGaugeEntities;
+    rowWindGaugeEntities.appendChild(this._elWindGaugeSpeedEntity);
+    rowWindGaugeEntities.appendChild(this._elWindGaugeMaxEntity);
+    root.appendChild(rowWindGaugeEntities);
+
+    const rowWindGaugeLayout = document.createElement("div");
+    rowWindGaugeLayout.className = "grid3";
+    this._elWindGaugePosition = mkSelect("Gauge position", "wind_gauge_position", [
+      ["bottom", "Bottom"],
+      ["top", "Top"],
+      ["left", "Left"],
+      ["right", "Right"],
+    ]);
+    this._elWindGaugeArcWidth = mkText("Gauge arc width (1-12)", "wind_gauge_arc_width", "number", "5");
+    this._elWindGaugeArcWidth.min = "1";
+    this._elWindGaugeArcWidth.max = "12";
+    this._elWindGaugeArcWidth.step = "0.5";
+    this._elWindGaugeFontSize = mkText("Gauge value font size (6-14)", "wind_gauge_font_size", "number", "8");
+    this._elWindGaugeFontSize.min = "6";
+    this._elWindGaugeFontSize.max = "14";
+    this._elWindGaugeFontSize.step = "0.5";
+    this._rowWindGaugeLayout = rowWindGaugeLayout;
+    rowWindGaugeLayout.appendChild(this._elWindGaugePosition);
+    rowWindGaugeLayout.appendChild(this._elWindGaugeArcWidth);
+    rowWindGaugeLayout.appendChild(this._elWindGaugeFontSize);
+    root.appendChild(rowWindGaugeLayout);
+
+    const rowWindGaugeStyle = document.createElement("div");
+    rowWindGaugeStyle.className = "grid2";
+    this._elWindGaugeMode = mkSelect("Gauge display", "wind_gauge_mode", [
+      ["dual", "Two gauge arcs"],
+      ["single_max_marker", "Single gauge + max marker"],
+    ]);
+    this._elWindGaugeValueColorRow = mkColorText("Gauge value color", "wind_gauge_value_color", "#ffffff");
+    this._elWindGaugeValueColor = this._elWindGaugeValueColorRow.children[0];
+    this._elWindGaugeValueColorPicker = this._elWindGaugeValueColorRow.children[1];
+    this._rowWindGaugeStyle = rowWindGaugeStyle;
+    rowWindGaugeStyle.appendChild(this._elWindGaugeMode);
+    rowWindGaugeStyle.appendChild(this._elWindGaugeValueColorRow);
+    root.appendChild(rowWindGaugeStyle);
+
+    const rowWindGaugeLabels = document.createElement("div");
+    rowWindGaugeLabels.className = "grid2";
+    this._elWindGaugeSpeedLabel = mkText("Current wind label", "wind_gauge_speed_label", "text", "Wind");
+    this._elWindGaugeMaxLabel = mkText("Maximum wind label", "wind_gauge_max_label", "text", "Max");
+    this._rowWindGaugeLabels = rowWindGaugeLabels;
+    rowWindGaugeLabels.appendChild(this._elWindGaugeSpeedLabel);
+    rowWindGaugeLabels.appendChild(this._elWindGaugeMaxLabel);
+    root.appendChild(rowWindGaugeLabels);
+
+    const rowWindGaugeRange = document.createElement("div");
+    rowWindGaugeRange.className = "grid3";
+    this._elWindGaugeMin = mkText("Gauge minimum", "wind_gauge_min", "number", "0");
+    this._elWindGaugeMin.step = "0.1";
+    this._elWindGaugeMax = mkText("Gauge maximum", "wind_gauge_max", "number", "30");
+    this._elWindGaugeMax.step = "0.1";
+    this._elWindGaugeDecimals = mkText("Gauge decimals (0-3)", "wind_gauge_decimals", "number", "1");
+    this._elWindGaugeDecimals.min = "0";
+    this._elWindGaugeDecimals.max = "3";
+    this._elWindGaugeDecimals.step = "1";
+    this._rowWindGaugeRange = rowWindGaugeRange;
+    rowWindGaugeRange.appendChild(this._elWindGaugeMin);
+    rowWindGaugeRange.appendChild(this._elWindGaugeMax);
+    rowWindGaugeRange.appendChild(this._elWindGaugeDecimals);
+    root.appendChild(rowWindGaugeRange);
+
+    const rowWindGaugeOpacity = document.createElement("div");
+    rowWindGaugeOpacity.className = "grid2";
+    this._elWindGaugeOpacity = mkText("Gauge opacity (0-100%)", "wind_gauge_opacity", "number", "90");
+    this._elWindGaugeOpacity.min = "0";
+    this._elWindGaugeOpacity.max = "100";
+    this._elWindGaugeOpacity.step = "1";
+    this._elWindGaugeTrackOpacity = mkText("Gauge track opacity (0-100%)", "wind_gauge_track_opacity", "number", "18");
+    this._elWindGaugeTrackOpacity.min = "0";
+    this._elWindGaugeTrackOpacity.max = "100";
+    this._elWindGaugeTrackOpacity.step = "1";
+    this._rowWindGaugeOpacity = rowWindGaugeOpacity;
+    rowWindGaugeOpacity.appendChild(this._elWindGaugeOpacity);
+    rowWindGaugeOpacity.appendChild(this._elWindGaugeTrackOpacity);
+    root.appendChild(rowWindGaugeOpacity);
+
+    const secWindGaugeIntervals = document.createElement("div");
+    secWindGaugeIntervals.className = "section";
+    this._rowWindGaugeIntervals = secWindGaugeIntervals;
+
+    const windGaugeIntervalTitle = document.createElement("div");
+    windGaugeIntervalTitle.className = "section-title";
+    windGaugeIntervalTitle.innerText = "Wind gauge intervals";
+    secWindGaugeIntervals.appendChild(windGaugeIntervalTitle);
+
+    const windGaugeIntervalNote = document.createElement("div");
+    windGaugeIntervalNote.className = "note";
+    windGaugeIntervalNote.innerText = "Shared by current and maximum wind gauges. Fill color and gradient set each active arc color from the gauge entity value.";
+    secWindGaugeIntervals.appendChild(windGaugeIntervalNote);
+
+    const windGaugeIntervalHead = document.createElement("div");
+    windGaugeIntervalHead.className = "section-head";
+    const btnAddWindGaugeInterval = document.createElement("button");
+    btnAddWindGaugeInterval.setAttribute("unelevated", "");
+    btnAddWindGaugeInterval.classList.add("haPrimary");
+    btnAddWindGaugeInterval.innerText = "+ Add gauge interval";
+    btnAddWindGaugeInterval.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._startAddWindGaugeInterval();
+    });
+    windGaugeIntervalHead.appendChild(btnAddWindGaugeInterval);
+    secWindGaugeIntervals.appendChild(windGaugeIntervalHead);
+
+    this._windGaugeIntervalList = document.createElement("div");
+    this._windGaugeIntervalList.className = "intervalList";
+    secWindGaugeIntervals.appendChild(this._windGaugeIntervalList);
+
+    this._windGaugeDraftBox = document.createElement("div");
+    this._windGaugeDraftBox.className = "draft";
+    secWindGaugeIntervals.appendChild(this._windGaugeDraftBox);
+    root.appendChild(secWindGaugeIntervals);
+
+    const sunFlowTitle = document.createElement("div");
+    sunFlowTitle.className = "section-title";
+    sunFlowTitle.innerText = "SunFlow";
+    root.appendChild(sunFlowTitle);
+
+    const sunFlowNote = document.createElement("div");
+    sunFlowNote.className = "note";
+    sunFlowNote.innerText = "Uses the main Entity by default (normally sun.sun). Optional entities below override individual values. Fill/gradient controls the sun and elapsed arc, Outline controls the horizon/future arc, and Scale controls secondary text/ticks.";
+    root.appendChild(sunFlowNote);
+
+    const rowSunFlowMainEntity = document.createElement("div");
+    rowSunFlowMainEntity.className = "grid1";
+    this._elSunFlowSunEntity = mkEntityControl("Sun entity override (optional)", "sunflow_sun_entity");
+    rowSunFlowMainEntity.appendChild(this._elSunFlowSunEntity);
+    root.appendChild(rowSunFlowMainEntity);
+
+    const rowSunFlowTimeEntities = document.createElement("div");
+    rowSunFlowTimeEntities.className = "grid2";
+    this._elSunFlowSunriseEntity = mkEntityControl("Sunrise time entity (optional)", "sunflow_sunrise_entity");
+    this._elSunFlowSunsetEntity = mkEntityControl("Sunset time entity (optional)", "sunflow_sunset_entity");
+    rowSunFlowTimeEntities.appendChild(this._elSunFlowSunriseEntity);
+    rowSunFlowTimeEntities.appendChild(this._elSunFlowSunsetEntity);
+    root.appendChild(rowSunFlowTimeEntities);
+
+    const rowSunFlowValueEntities = document.createElement("div");
+    rowSunFlowValueEntities.className = "grid3";
+    this._elSunFlowElevationEntity = mkEntityControl("Solar elevation entity (optional)", "sunflow_elevation_entity");
+    this._elSunFlowAzimuthEntity = mkEntityControl("Solar azimuth entity (optional)", "sunflow_azimuth_entity");
+    this._elSunFlowRisingEntity = mkEntityControl("Sun rising entity (optional)", "sunflow_rising_entity");
+    rowSunFlowValueEntities.appendChild(this._elSunFlowElevationEntity);
+    rowSunFlowValueEntities.appendChild(this._elSunFlowAzimuthEntity);
+    rowSunFlowValueEntities.appendChild(this._elSunFlowRisingEntity);
+    root.appendChild(rowSunFlowValueEntities);
+
+    const rowSunFlowToggles1 = document.createElement("div");
+    rowSunFlowToggles1.className = "grid3";
+    const sunFlowSunriseSwitch = mkSwitch("Show sunrise", "sunflow_show_sunrise");
+    const sunFlowSunsetSwitch = mkSwitch("Show sunset", "sunflow_show_sunset");
+    const sunFlowDaylightSwitch = mkSwitch("Show daylight duration", "sunflow_show_daylight");
+    rowSunFlowToggles1.appendChild(sunFlowSunriseSwitch.wrap);
+    rowSunFlowToggles1.appendChild(sunFlowSunsetSwitch.wrap);
+    rowSunFlowToggles1.appendChild(sunFlowDaylightSwitch.wrap);
+    root.appendChild(rowSunFlowToggles1);
+
+    const rowSunFlowToggles2 = document.createElement("div");
+    rowSunFlowToggles2.className = "grid3";
+    const sunFlowNowSwitch = mkSwitch("Show current time", "sunflow_show_now");
+    const sunFlowElevationSwitch = mkSwitch("Show solar elevation", "sunflow_show_elevation");
+    const sunFlowAzimuthSwitch = mkSwitch("Show solar azimuth", "sunflow_show_azimuth");
+    rowSunFlowToggles2.appendChild(sunFlowNowSwitch.wrap);
+    rowSunFlowToggles2.appendChild(sunFlowElevationSwitch.wrap);
+    rowSunFlowToggles2.appendChild(sunFlowAzimuthSwitch.wrap);
+    root.appendChild(rowSunFlowToggles2);
+
+    const rowSunFlowToggles3 = document.createElement("div");
+    rowSunFlowToggles3.className = "grid2";
+    const sunFlowRemainingSwitch = mkSwitch("Show remaining time", "sunflow_show_remaining");
+    const sunFlowScaleSwitch = mkSwitch("Show arc scale", "sunflow_show_scale");
+    rowSunFlowToggles3.appendChild(sunFlowRemainingSwitch.wrap);
+    rowSunFlowToggles3.appendChild(sunFlowScaleSwitch.wrap);
+    root.appendChild(rowSunFlowToggles3);
+
+    const rowSunFlowLabels1 = document.createElement("div");
+    rowSunFlowLabels1.className = "grid3";
+    this._elSunFlowSunriseLabel = mkText("Sunrise label", "sunflow_sunrise_label", "text", "Sunrise");
+    this._elSunFlowSunsetLabel = mkText("Sunset label", "sunflow_sunset_label", "text", "Sunset");
+    this._elSunFlowDaylightLabel = mkText("Daylight label", "sunflow_daylight_label", "text", "Daylight");
+    rowSunFlowLabels1.appendChild(this._elSunFlowSunriseLabel);
+    rowSunFlowLabels1.appendChild(this._elSunFlowSunsetLabel);
+    rowSunFlowLabels1.appendChild(this._elSunFlowDaylightLabel);
+    root.appendChild(rowSunFlowLabels1);
+
+    const rowSunFlowLabels2 = document.createElement("div");
+    rowSunFlowLabels2.className = "grid3";
+    this._elSunFlowNowLabel = mkText("Current time label", "sunflow_now_label", "text", "Now");
+    this._elSunFlowElevationLabel = mkText("Elevation label", "sunflow_elevation_label", "text", "Elevation");
+    this._elSunFlowAzimuthLabel = mkText("Azimuth label", "sunflow_azimuth_label", "text", "Azimuth");
+    rowSunFlowLabels2.appendChild(this._elSunFlowNowLabel);
+    rowSunFlowLabels2.appendChild(this._elSunFlowElevationLabel);
+    rowSunFlowLabels2.appendChild(this._elSunFlowAzimuthLabel);
+    root.appendChild(rowSunFlowLabels2);
+
+    const rowSunFlowLabels3 = document.createElement("div");
+    rowSunFlowLabels3.className = "grid2";
+    this._elSunFlowRemainingLabel = mkText("Daytime remaining label", "sunflow_remaining_label", "text", "remaining");
+    this._elSunFlowUntilSunriseLabel = mkText("Night countdown label", "sunflow_until_sunrise_label", "text", "until sunrise");
+    rowSunFlowLabels3.appendChild(this._elSunFlowRemainingLabel);
+    rowSunFlowLabels3.appendChild(this._elSunFlowUntilSunriseLabel);
+    root.appendChild(rowSunFlowLabels3);
+
+    const rowSunFlowUnits = document.createElement("div");
+    rowSunFlowUnits.className = "grid3";
+    this._elSunFlowHoursLabel = mkText("Hours label", "sunflow_hours_label", "text", "h");
+    this._elSunFlowMinutesLabel = mkText("Minutes label", "sunflow_minutes_label", "text", "min");
+    this._elSunFlowUnavailableLabel = mkText("Unavailable label", "sunflow_unavailable_label", "text", "Sun data unavailable");
+    rowSunFlowUnits.appendChild(this._elSunFlowHoursLabel);
+    rowSunFlowUnits.appendChild(this._elSunFlowMinutesLabel);
+    rowSunFlowUnits.appendChild(this._elSunFlowUnavailableLabel);
+    root.appendChild(rowSunFlowUnits);
+
+    const rowSunFlowStyle = document.createElement("div");
+    rowSunFlowStyle.className = "grid3";
+    this._elSunFlowGlowStrength = mkText("Glow strength (0-100%)", "sunflow_glow_strength", "number", "85");
+    this._elSunFlowGlowStrength.min = "0";
+    this._elSunFlowGlowStrength.max = "100";
+    this._elSunFlowGlowStrength.step = "1";
+    this._elSunFlowSunSize = mkText("Sun size (7-26)", "sunflow_sun_size", "number", "14");
+    this._elSunFlowSunSize.min = "7";
+    this._elSunFlowSunSize.max = "26";
+    this._elSunFlowSunSize.step = "0.5";
+    this._elSunFlowArcWidth = mkText("Arc width (0.5-10)", "sunflow_arc_width", "number", "2.5");
+    this._elSunFlowArcWidth.min = "0.5";
+    this._elSunFlowArcWidth.max = "10";
+    this._elSunFlowArcWidth.step = "0.5";
+    rowSunFlowStyle.appendChild(this._elSunFlowGlowStrength);
+    rowSunFlowStyle.appendChild(this._elSunFlowSunSize);
+    rowSunFlowStyle.appendChild(this._elSunFlowArcWidth);
+    root.appendChild(rowSunFlowStyle);
+
+    const rowSunFlowTextStyle = document.createElement("div");
+    rowSunFlowTextStyle.className = "grid2";
+    this._elSunFlowFontScale = mkText("Text size (60-160%)", "sunflow_font_scale", "number", "100");
+    this._elSunFlowFontScale.min = "60";
+    this._elSunFlowFontScale.max = "160";
+    this._elSunFlowFontScale.step = "5";
+    this._elSunFlowValueColorRow = mkColorText("Primary value color", "sunflow_value_color", "#ffffff");
+    this._elSunFlowValueColor = this._elSunFlowValueColorRow.children[0];
+    this._elSunFlowValueColorPicker = this._elSunFlowValueColorRow.children[1];
+    rowSunFlowTextStyle.appendChild(this._elSunFlowFontScale);
+    rowSunFlowTextStyle.appendChild(this._elSunFlowValueColorRow);
+    root.appendChild(rowSunFlowTextStyle);
+
+    this._sunFlowRows = [
+      sunFlowTitle,
+      sunFlowNote,
+      rowSunFlowMainEntity,
+      rowSunFlowTimeEntities,
+      rowSunFlowValueEntities,
+      rowSunFlowToggles1,
+      rowSunFlowToggles2,
+      rowSunFlowToggles3,
+      rowSunFlowLabels1,
+      rowSunFlowLabels2,
+      rowSunFlowLabels3,
+      rowSunFlowUnits,
+      rowSunFlowStyle,
+      rowSunFlowTextStyle,
+    ];
+    this._sunFlowEntityControls = [
+      [this._elSunFlowSunEntity, "sunflow_sun_entity"],
+      [this._elSunFlowSunriseEntity, "sunflow_sunrise_entity"],
+      [this._elSunFlowSunsetEntity, "sunflow_sunset_entity"],
+      [this._elSunFlowElevationEntity, "sunflow_elevation_entity"],
+      [this._elSunFlowAzimuthEntity, "sunflow_azimuth_entity"],
+      [this._elSunFlowRisingEntity, "sunflow_rising_entity"],
+    ];
+    this._sunFlowSwitchControls = [
+      [sunFlowSunriseSwitch.sw, "sunflow_show_sunrise"],
+      [sunFlowSunsetSwitch.sw, "sunflow_show_sunset"],
+      [sunFlowDaylightSwitch.sw, "sunflow_show_daylight"],
+      [sunFlowNowSwitch.sw, "sunflow_show_now"],
+      [sunFlowElevationSwitch.sw, "sunflow_show_elevation"],
+      [sunFlowAzimuthSwitch.sw, "sunflow_show_azimuth"],
+      [sunFlowRemainingSwitch.sw, "sunflow_show_remaining"],
+      [sunFlowScaleSwitch.sw, "sunflow_show_scale"],
+    ];
+    this._sunFlowTextControls = [
+      [this._elSunFlowSunriseLabel, "sunflow_sunrise_label"],
+      [this._elSunFlowSunsetLabel, "sunflow_sunset_label"],
+      [this._elSunFlowDaylightLabel, "sunflow_daylight_label"],
+      [this._elSunFlowNowLabel, "sunflow_now_label"],
+      [this._elSunFlowElevationLabel, "sunflow_elevation_label"],
+      [this._elSunFlowAzimuthLabel, "sunflow_azimuth_label"],
+      [this._elSunFlowRemainingLabel, "sunflow_remaining_label"],
+      [this._elSunFlowUntilSunriseLabel, "sunflow_until_sunrise_label"],
+      [this._elSunFlowHoursLabel, "sunflow_hours_label"],
+      [this._elSunFlowMinutesLabel, "sunflow_minutes_label"],
+      [this._elSunFlowUnavailableLabel, "sunflow_unavailable_label"],
+    ];
 
     //v1.0.2
     const rowScale = document.createElement("div");
@@ -9883,14 +11569,18 @@ varsHead.innerHTML = `
 
     const style = document.createElement("style");
     style.textContent = `
-      .form { display:flex; flex-direction:column; gap:12px; padding:8px 0; overflow: visible; }
+      :host { display:block; width:100%; box-sizing:border-box; }
+      .form { display:flex; flex-direction:column; gap:12px; padding:8px 0; overflow: visible; min-width:0; width:100%; box-sizing:border-box; }
+      .form > * { min-width:0; }
       .note{ font-size: 12px; line-height: 1.35; opacity: 0.9; padding: 8px 10px; border-radius: 10px; background: rgba(0,0,0,0.05); border: 1px solid rgba(0,0,0,0.10);} 
-      ha-entity-picker, ha-selector, ha-combo-box, ha-textfield, select { display:block; width:100%; }
+      ha-entity-picker, ha-selector, ha-combo-box, ha-input, ha-textfield, select { display:block; width:100%; }
       ha-entity-picker { min-height: 56px; }
+      ha-formfield { display:block; width:100%; min-width:0; }
 
       .grid1 { display:grid; grid-template-columns: 1fr; gap:12px; }
       .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
       .grid3 { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px; }
+      .grid1 > *, .grid2 > *, .grid3 > * { min-width:0; }
       .toggles { display:flex; flex-direction:column; gap:8px; justify-content:center; }
       .hint{ font-size: 12px; opacity: .7; margin-top: -6px; }
 
@@ -10110,7 +11800,6 @@ varsHead.innerHTML = `
         line-height: 1;
         background: transparent;
       }
-      button
       .animRow{ margin-top: 10px; }
       .badgeIntervalsSec{ margin-top: 16px; padding: 10px; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; background: rgba(255,255,255,0.03); }
       .badgeIntervalsHdr{ display:flex; align-items:center; justify-content:space-between; gap:10px; font-weight: 700; margin-bottom: 10px; }
@@ -10230,8 +11919,8 @@ varsHead.innerHTML = `
         --mdc-button-raised-fill-color: var(--primary-color);
         --mdc-button-raised-ink-color: var(--text-primary-color, #fff);
       }
-.draft { display:none; padding:12px; border-radius:14px; border:1px solid rgba(0,0,0,0.14); background: rgba(0,0,0,0.02); }
-      .draft.show { display:block; }
+.draft { display:none; padding:12px; border-radius:14px; border:1px solid rgba(0,0,0,0.14); background: rgba(0,0,0,0.02); min-width:0; }
+      .draft.show { display:block; max-height:min(78vh, 980px); overflow:auto; overscroll-behavior:contain; }
       .olddraftHead { display:flex; justify-content:space-between; align-items:center; font-weight:800; margin-bottom:10px; }
       
       .draftHead{
@@ -10254,10 +11943,16 @@ varsHead.innerHTML = `
       .draftGrid1 { display:grid; grid-template-columns: 1fr; gap:12px; }
       .draftGrid2 { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
       .draftGrid3 { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px; }
+      .draftGrid1 > *, .draftGrid2 > *, .draftGrid3 > * { min-width:0; }
       .draftActions { display:flex; justify-content:flex-end; gap:10px; margin-top:10px; }
+      .ascField { display:flex; flex-direction:column; gap:6px; min-width:0; }
+      .ascFieldLabel { font-size:12px; font-weight:700; opacity:0.88; line-height:1.3; }
+      .ascColorLabel { grid-column: 1 / -1; font-size:12px; font-weight:700; opacity:0.88; line-height:1.3; }
+      .ascField ha-input, .ascField ha-textfield, .ascField ha-selector, .ascField ha-combo-box, .ascField ha-entity-picker, .ascField ha-icon-picker { min-height:56px; }
 
-      .colorRow { display:flex; align-items:flex-end; gap:10px; margin-top:10px; }
-      .colorRow ha-textfield { flex: 1 1 auto; }
+      .colorRow { display:flex; align-items:flex-end; gap:10px; margin-top:10px; min-width:0; }
+      .colorRow > * { min-width:0; }
+      .colorRow ha-input, .colorRow ha-textfield, .colorRow ha-selector, .colorRow ha-combo-box { flex: 1 1 auto; min-height:56px; }
       .colorBtn{
         width: 44px;
         height: 38px;
@@ -10269,6 +11964,9 @@ varsHead.innerHTML = `
       }
     `;
 
+    this.style.display = "block";
+    this.style.width = "100%";
+    this.style.boxSizing = "border-box";
     this.innerHTML = "";
     this.appendChild(style);
     this.appendChild(root);
@@ -10301,6 +11999,108 @@ varsHead.innerHTML = `
       this._elEntity2.value = this._config.entity2 || "";
       const show = (baseSym === "battery_splitted_segments");
       this._elEntity2.style.display = show ? "" : "none";
+    }
+
+    const isWindDirection = (baseSym === "wind_direction");
+    if (this._rowWindToggles && this._swWindDegrees && this._swWindDirection && this._swWindMarkers) {
+      this._rowWindToggles.style.display = isWindDirection ? "" : "none";
+      this._swWindDegrees.checked = this._config.wind_show_degrees !== false;
+      this._swWindDirection.checked = this._config.wind_show_direction !== false;
+      this._swWindMarkers.checked = this._config.wind_show_direction_markers !== false;
+    }
+    if (this._rowWindLanguage && this._elWindDirectionLanguage) {
+      this._rowWindLanguage.style.display = isWindDirection ? "" : "none";
+      this._setSelectControlValue?.(this._elWindDirectionLanguage, this._config.wind_direction_language || "auto");
+    }
+    if (this._rowWindFonts && this._elWindDegreeFont && this._elWindDirectionFont && this._elWindMarkerFont) {
+      this._rowWindFonts.style.display = isWindDirection ? "" : "none";
+      this._elWindDegreeFont.value = String(this._config.wind_degree_font_size ?? 0);
+      this._elWindDirectionFont.value = String(this._config.wind_direction_font_size ?? 0);
+      this._elWindMarkerFont.value = String(this._config.wind_direction_marker_font_size ?? 15);
+    }
+    if (this._rowWindShape && this._elWindOutlineWidth && this._elWindArrowSize && this._elWindArrowThickness) {
+      this._rowWindShape.style.display = isWindDirection ? "" : "none";
+      this._elWindOutlineWidth.value = String(this._config.wind_outline_width ?? 3.2);
+      this._elWindArrowSize.value = String(this._config.wind_arrow_size ?? 82);
+      this._elWindArrowThickness.value = String(this._config.wind_arrow_thickness ?? 100);
+    }
+    const showWindGaugeDetails = isWindDirection && !!this._config.wind_gauge_enabled;
+    if (this._rowWindGaugeTitle) {
+      this._rowWindGaugeTitle.style.display = isWindDirection ? "" : "none";
+    }
+    if (this._rowWindGaugeToggles && this._swWindGaugeEnabled && this._swWindGaugeValues && this._swWindGaugeScale) {
+      this._rowWindGaugeToggles.style.display = isWindDirection ? "" : "none";
+      this._swWindGaugeEnabled.checked = !!this._config.wind_gauge_enabled;
+      this._swWindGaugeValues.checked = this._config.wind_gauge_show_values !== false;
+      this._swWindGaugeScale.checked = !!this._config.wind_gauge_show_scale;
+    }
+    if (this._rowWindGaugeEntities && this._elWindGaugeSpeedEntity && this._elWindGaugeMaxEntity) {
+      this._rowWindGaugeEntities.style.display = showWindGaugeDetails ? "" : "none";
+      this._elWindGaugeSpeedEntity.hass = this._hass;
+      this._elWindGaugeMaxEntity.hass = this._hass;
+      this._elWindGaugeSpeedEntity.value = String(this._config.wind_gauge_speed_entity || "");
+      this._elWindGaugeMaxEntity.value = String(this._config.wind_gauge_max_entity || "");
+    }
+    if (this._rowWindGaugeLayout && this._elWindGaugePosition && this._elWindGaugeArcWidth && this._elWindGaugeFontSize) {
+      this._rowWindGaugeLayout.style.display = showWindGaugeDetails ? "" : "none";
+      this._setSelectControlValue?.(this._elWindGaugePosition, this._config.wind_gauge_position || "bottom");
+      this._elWindGaugeArcWidth.value = String(this._config.wind_gauge_arc_width ?? 5);
+      this._elWindGaugeFontSize.value = String(this._config.wind_gauge_font_size ?? 8);
+    }
+    if (this._rowWindGaugeStyle && this._elWindGaugeMode && this._elWindGaugeValueColorRow) {
+      this._rowWindGaugeStyle.style.display = showWindGaugeDetails ? "" : "none";
+      this._setSelectControlValue?.(this._elWindGaugeMode, normalizeWindGaugeMode(this._config.wind_gauge_mode));
+      const gaugeValueColor = normalizeHex(this._config.wind_gauge_value_color, "#ffffff");
+      if (this._elWindGaugeValueColor) this._elWindGaugeValueColor.value = gaugeValueColor;
+      if (this._elWindGaugeValueColorPicker) this._elWindGaugeValueColorPicker.value = toPickerHex(gaugeValueColor, "#ffffff");
+    }
+    if (this._rowWindGaugeLabels && this._elWindGaugeSpeedLabel && this._elWindGaugeMaxLabel) {
+      this._rowWindGaugeLabels.style.display = showWindGaugeDetails ? "" : "none";
+      this._elWindGaugeSpeedLabel.value = String(this._config.wind_gauge_speed_label ?? "Wind");
+      this._elWindGaugeMaxLabel.value = String(this._config.wind_gauge_max_label ?? "Max");
+    }
+    if (this._rowWindGaugeRange && this._elWindGaugeMin && this._elWindGaugeMax && this._elWindGaugeDecimals) {
+      this._rowWindGaugeRange.style.display = showWindGaugeDetails ? "" : "none";
+      this._elWindGaugeMin.value = String(this._config.wind_gauge_min ?? 0);
+      this._elWindGaugeMax.value = String(this._config.wind_gauge_max ?? 30);
+      this._elWindGaugeDecimals.value = String(this._config.wind_gauge_decimals ?? 1);
+    }
+    if (this._rowWindGaugeOpacity && this._elWindGaugeOpacity && this._elWindGaugeTrackOpacity) {
+      this._rowWindGaugeOpacity.style.display = showWindGaugeDetails ? "" : "none";
+      this._elWindGaugeOpacity.value = String(this._config.wind_gauge_opacity ?? 90);
+      this._elWindGaugeTrackOpacity.value = String(this._config.wind_gauge_track_opacity ?? 18);
+    }
+    if (this._rowWindGaugeIntervals) {
+      this._rowWindGaugeIntervals.style.display = showWindGaugeDetails ? "" : "none";
+    }
+
+    const isSunFlow = (baseSym === "sun_flow");
+    (this._sunFlowRows || []).forEach((row) => {
+      if (row) row.style.display = isSunFlow ? "" : "none";
+    });
+    if (isSunFlow) {
+      (this._sunFlowEntityControls || []).forEach(([control, key]) => {
+        if (!control) return;
+        control.hass = this._hass;
+        control.value = String(this._config[key] || "");
+      });
+      (this._sunFlowSwitchControls || []).forEach(([control, key]) => {
+        if (control) control.checked = !!this._config[key];
+      });
+      (this._sunFlowTextControls || []).forEach(([control, key]) => {
+        if (control) control.value = String(this._config[key] ?? "");
+      });
+      if (this._elSunFlowGlowStrength) this._elSunFlowGlowStrength.value = String(this._config.sunflow_glow_strength ?? 85);
+      if (this._elSunFlowSunSize) this._elSunFlowSunSize.value = String(this._config.sunflow_sun_size ?? 14);
+      if (this._elSunFlowArcWidth) this._elSunFlowArcWidth.value = String(this._config.sunflow_arc_width ?? 2.5);
+      if (this._elSunFlowFontScale) this._elSunFlowFontScale.value = String(this._config.sunflow_font_scale ?? 100);
+
+      const sunFlowValueColor = normalizeHex(this._config.sunflow_value_color, "#ffffff");
+      if (this._elSunFlowValueColor) this._elSunFlowValueColor.value = sunFlowValueColor;
+      if (this._elSunFlowValueColorPicker) this._elSunFlowValueColorPicker.value = toPickerHex(sunFlowValueColor, "#ffffff");
+    }
+    if (this._ffShowScale) {
+      this._ffShowScale.label = isWindDirection ? "Show compass scale" : "Show scale (ticks)";
     }
 
     // Industrial look toggle (only for symbols that support it, not Fan/Heatpump)
@@ -10558,7 +12358,7 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
     // Fan: show frame toggle instead of show_scale
     const symNow2 = String(this._config.symbol || "battery_liquid");
     const isFan = (symNow2 === "fan");
-    if (this._ffShowScale) this._ffShowScale.style.display = isFan ? "none" : "";
+    if (this._ffShowScale) this._ffShowScale.style.display = (isFan || isSunFlow) ? "none" : "";
     if (this._ffFanFrame) this._ffFanFrame.style.display = isFan ? "" : "none";
     this._swStats.checked = !!this._config.show_stats;
 
@@ -10666,9 +12466,72 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
 
       list.appendChild(row);
     });
+    this._renderWindGaugeIntervals();
+  }
+
+  _renderWindGaugeIntervals() {
+    const list = this._windGaugeIntervalList;
+    if (!list) return;
+    list.innerHTML = "";
+
+    const intervals = (this._config.wind_gauge_intervals || [])
+      .map(normalizeInterval)
+      .sort((a, b) => a.to - b.to);
+
+    intervals.forEach((it) => {
+      const row = document.createElement("div");
+      row.className = "intervalItem";
+
+      const badgeFill = document.createElement("div");
+      badgeFill.className = "badge";
+      badgeFill.style.background = it.gradient?.enabled
+        ? `linear-gradient(${it.gradient.from}, ${it.gradient.to})`
+        : it.color;
+
+      const text = document.createElement("div");
+      text.className = "itText";
+      const title = document.createElement("div");
+      title.className = "itTitle";
+      title.innerText = `Up to ${it.to}`;
+      const sub = document.createElement("div");
+      sub.className = "itSub";
+      sub.innerText = `Gauge color: ${it.gradient?.enabled ? `${it.gradient.from} to ${it.gradient.to}` : it.color}`;
+      text.appendChild(title);
+      text.appendChild(sub);
+
+      const btns = document.createElement("div");
+      btns.className = "btns";
+      const bEdit = document.createElement("button");
+      bEdit.setAttribute("unelevated", "");
+      bEdit.classList.add("haPrimary");
+      bEdit.innerText = "Edit";
+      bEdit.addEventListener("click", (e) => { e.stopPropagation(); this._startEditWindGaugeInterval(it.id); });
+      const bDel = document.createElement("button");
+      bDel.setAttribute("unelevated", "");
+      bDel.classList.add("haPrimary");
+      bDel.innerText = "Delete";
+      bDel.addEventListener("click", (e) => { e.stopPropagation(); this._deleteWindGaugeInterval(it.id); });
+      const bDup = document.createElement("button");
+      bDup.setAttribute("unelevated", "");
+      bDup.classList.add("haPrimary");
+      bDup.innerText = "Duplicate";
+      bDup.addEventListener("click", (e) => { e.stopPropagation(); this._duplicateWindGaugeInterval(it.id); });
+      btns.appendChild(bEdit);
+      btns.appendChild(bDel);
+      btns.appendChild(bDup);
+
+      const wrap = document.createElement("div");
+      wrap.className = "itWrap";
+      wrap.appendChild(text);
+      wrap.appendChild(btns);
+      row.appendChild(badgeFill);
+      row.appendChild(wrap);
+      list.appendChild(row);
+    });
   }
 
   _startAdd() {
+    this._draftTarget = "main";
     this._editingId = null;
     this._draft = normalizeInterval({
       id: uid("it"),
@@ -10682,6 +12545,7 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
   }
 
   _startEdit(id) {
+    this._draftTarget = "main";
     const it = (this._config.intervals || []).map(normalizeInterval).find(x => x.id === id);
     this._editingId = id;
     this._draft = normalizeInterval(deepClone(it || {}));
@@ -10703,30 +12567,81 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
     this._commit("intervals", cur.map(normalizeInterval));
   }
 
+  _startAddWindGaugeInterval() {
+    this._draftTarget = "wind_gauge";
+    this._editingId = null;
+    this._draft = normalizeInterval({
+      id: uid("wgi"),
+      to: 0,
+      color: "#22c55e",
+      outline: "#ffffff",
+      scale_color: "#22c55e",
+      gradient: { enabled: false, from: "#22c55e", to: "#22c55e" }
+    });
+    this._renderDraft(true);
+  }
+
+  _startEditWindGaugeInterval(id) {
+    const it = (this._config.wind_gauge_intervals || []).map(normalizeInterval).find((x) => x.id === id);
+    this._draftTarget = "wind_gauge";
+    this._editingId = id;
+    this._draft = normalizeInterval(deepClone(it || {}));
+    this._renderDraft(true);
+  }
+
+  _deleteWindGaugeInterval(id) {
+    const next = (this._config.wind_gauge_intervals || [])
+      .map(normalizeInterval)
+      .filter((x) => x.id !== id);
+    this._commit("wind_gauge_intervals", next.map(normalizeInterval));
+  }
+
+  _duplicateWindGaugeInterval(id) {
+    const cur = (this._config.wind_gauge_intervals || []).map(normalizeInterval);
+    const idx = cur.findIndex((x) => x.id === id);
+    if (idx === -1) return;
+    const copy = normalizeInterval(deepClone(cur[idx]));
+    copy.id = uid("wgi");
+    cur.splice(idx + 1, 0, copy);
+    this._commit("wind_gauge_intervals", cur.map(normalizeInterval));
+  }
+
   _closeDraft() {
     this._draft = null;
     this._editingId = null;
+    this._draftTarget = "main";
     this._renderDraft(false);
   }
 
   _saveDraft() {
     if (!this._draft) return;
     const d = normalizeInterval(this._draft);
-    const cur = (this._config.intervals || []).map(normalizeInterval);
+    const key = this._draftTarget === "wind_gauge" ? "wind_gauge_intervals" : "intervals";
+    const cur = (this._config[key] || []).map(normalizeInterval);
 
     const idx = cur.findIndex(x => x.id === d.id);
     if (idx === -1) cur.push(d);
     else cur[idx] = d;
 
-    this._commit("intervals", cur.map(normalizeInterval));
+    this._commit(key, cur.map(normalizeInterval));
     this._closeDraft();
   }
 
   _renderDraft(forceShow) {
-    const box = this._draftBox;
+    const isGaugeDraft = this._draftTarget === "wind_gauge";
+    const box = isGaugeDraft ? this._windGaugeDraftBox : this._draftBox;
+    const otherBox = isGaugeDraft ? this._draftBox : this._windGaugeDraftBox;
+    if (otherBox) {
+      otherBox.classList.remove("show");
+      otherBox.innerHTML = "";
+    }
+    if (!box) return;
     if (!this._draft) {
-      box.classList.remove("show");
-      box.innerHTML = "";
+      [this._draftBox, this._windGaugeDraftBox].forEach((draftBox) => {
+        if (!draftBox) return;
+        draftBox.classList.remove("show");
+        draftBox.innerHTML = "";
+      });
       return;
     }
     if (forceShow) box.classList.add("show");
@@ -10735,7 +12650,8 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
 
     const head = document.createElement("div");
     head.className = "draftHead";
-    head.innerHTML = `<div>${this._editingId == null ? "Add interval" : "Edit interval"}</div>`;
+    const draftTitle = isGaugeDraft ? "gauge interval" : "interval";
+    head.innerHTML = `<div>${this._editingId == null ? "Add" : "Edit"} ${draftTitle}</div>`;
     const btnClose = document.createElement("button");
     btnClose.setAttribute("unelevated", "");
     btnClose.classList.add("haPrimary");
@@ -10748,10 +12664,10 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
     grid.className = "draftGrid2";
 
     const _symNow = String(this._config?.symbol || "");
-    const showSeconds = (_symNow === "garage_door" || _symNow === "window" || _symNow === "washing_machine" || _symNow === "tumble_dryer");
+    const showSeconds = !isGaugeDraft && (_symNow === "garage_door" || _symNow === "window" || _symNow === "washing_machine" || _symNow === "tumble_dryer");
 
     // Optional static match (exact match, case-insensitive) for non-numeric states
-    const tfMatch = document.createElement("ha-textfield");
+    const tfMatch = createEditorInput();
     tfMatch.label = "Match value (optional)";
     tfMatch.placeholder = "e.g. on / off / open / closed / normal";
     tfMatch.value = String(this._draft.match ?? "");
@@ -10759,10 +12675,10 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
       e.stopPropagation();
       this._draft.match = String(tfMatch.value || "").trim();
     });
-    grid.appendChild(tfMatch);
+    if (!isGaugeDraft) grid.appendChild(tfMatch);
 
     // Numeric upper bound (default behaviour)
-    const tfTo = document.createElement("ha-textfield");
+    const tfTo = createEditorInput();
     tfTo.type = "number";
     tfTo.label = "Up to value";
     tfTo.step = "0.1";
@@ -10771,7 +12687,7 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
     grid.appendChild(tfTo);
 
     // New value (optional) -> overrides the displayed value on the main card when this interval is active
-    const tfNewVal = document.createElement("ha-textfield");
+    const tfNewVal = createEditorInput();
     tfNewVal.label = "New value (optional) support variables. Replaces card value";
     tfNewVal.placeholder = "e.g. High temperature: <value>";
     tfNewVal.helperText = "If set, this replaces the value text shown on the card for this interval. Supports <value>, <state>, <name>, <unit>, <attr:xxx>, etc.";
@@ -10779,11 +12695,11 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
     tfNewVal.value = String(this._draft.new_value ?? "");
     tfNewVal.style.gridColumn = "1 / -1";
     tfNewVal.addEventListener("input", (e) => { e.stopPropagation(); this._draft.new_value = tfNewVal.value; });
-    grid.appendChild(tfNewVal);
+    if (!isGaugeDraft) grid.appendChild(tfNewVal);
 
     // Per-section seconds (only shown for Garage door)
     if (showSeconds) {
-      const tfSec = document.createElement("ha-textfield");
+      const tfSec = createEditorInput();
       tfSec.type = "number";
       tfSec.label = "Seconds to open this segment";
       tfSec.step = "0.1";
@@ -10822,7 +12738,7 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
       const row = document.createElement("div");
       row.className = "colorRow";
 
-      const tf = document.createElement("ha-textfield");
+      const tf = createEditorInput();
       tf.label = label;
       tf.placeholder = "#RRGGBB";
       tf.addEventListener("click", stopDraftBubble, true);
@@ -10838,13 +12754,13 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
 
       const cur = normalizeHex(getVal(), "#ffffff");
       tf.value = cur.toUpperCase();
-      btn.value = cur;
+      btn.value = toPickerHex(cur, "#ffffff");
 
       tf.addEventListener("change", (e) => {
         e.stopPropagation();
         const n = normalizeHex(tf.value, cur).toUpperCase();
         tf.value = n;
-        btn.value = n;
+        btn.value = toPickerHex(n, "#ffffff");
         setVal(n);
       });
 
@@ -10861,8 +12777,10 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
     };
 
     box.appendChild(mkDraftColor("Fill color (HEX)", () => this._draft.color, (v) => { this._draft.color = v; }));
-    box.appendChild(mkDraftColor("Outline color (HEX)", () => this._draft.outline, (v) => { this._draft.outline = v; }));
-    box.appendChild(mkDraftColor("Scale color (HEX)", () => this._draft.scale_color, (v) => { this._draft.scale_color = v; }));
+    if (!isGaugeDraft) {
+      box.appendChild(mkDraftColor("Outline color (HEX)", () => this._draft.outline, (v) => { this._draft.outline = v; }));
+      box.appendChild(mkDraftColor("Scale color (HEX)", () => this._draft.scale_color, (v) => { this._draft.scale_color = v; }));
+    }
 
     if (this._draft.gradient?.enabled) {
       box.appendChild(mkDraftColor(
@@ -10896,6 +12814,8 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
     actions.appendChild(btnCancel);
     actions.appendChild(btnSave);
     box.appendChild(actions);
+    this._decorateEditorFieldLabels(box);
+    this._decorateColorRows(box);
 
       }  // =========================
   // Badges (global overlay)
@@ -11607,6 +13527,13 @@ _applyBadgeDraftPreview() {
     const box = this._badgeDraftBox;
     if (!box) return;
 
+    const mkSelectControl = this._mkSelectControl;
+    const setSelectControlOptions = this._setSelectControlOptions;
+    const setSelectControlValue = this._setSelectControlValue;
+    if (!mkSelectControl || !setSelectControlOptions || !setSelectControlValue) {
+      throw new Error("Andy Sensor Card: badge editor controls were not initialized");
+    }
+
     if (!this._badgeDraft) {
       box.classList.remove("show");
       box.innerHTML = "";
@@ -11655,7 +13582,7 @@ ent.addEventListener("click", (e) => e.stopPropagation());
 if (this._hass) ent.hass = this._hass;
 box.appendChild(ent);
 
-tfTitle = document.createElement("ha-textfield");
+tfTitle = createEditorInput();
 tfTitle.label = "Badge title (optional)";
 tfTitle.helperText = "Shown in the badge list (helps you keep track).";
 tfTitle.value = this._badgeDraft.title || "";
@@ -11672,7 +13599,7 @@ box.appendChild(tfTitle);
 const rowLI = document.createElement("div");
 rowLI.className = "draftGrid2";
 
-const tfLabel = document.createElement("ha-textfield");
+const tfLabel = createEditorInput();
 tfLabel.label = "Label and variables";
 tfLabel.helperText = "Use variables listed below, e.g. <value>, <name>, <last_changed_rel>, <attr:xxx>.";
 tfLabel.persistentHelperText = true;
@@ -11688,7 +13615,7 @@ if (customElements.get("ha-icon-picker")) {
   iconEl.addEventListener("value-changed", (e) => { e.stopPropagation(); this._badgeDraft.icon = e.detail?.value || ""; this._applyBadgeDraftPreview(); updateAnimVisibility(); });
   if (this._hass) iconEl.hass = this._hass;
 } else {
-  iconEl = document.createElement("ha-textfield");
+  iconEl = createEditorInput();
   iconEl.label = "Icon (mdi:...)";
   iconEl.value = this._badgeDraft.icon || "";
   iconEl.addEventListener("input", (e) => { e.stopPropagation(); this._badgeDraft.icon = iconEl.value; this._applyBadgeDraftPreview(); updateAnimVisibility(); });
@@ -11703,7 +13630,7 @@ box.appendChild(rowLI);
 const rowXY = document.createElement("div");
 rowXY.className = "draftGrid2";
 
-const tfX = document.createElement("ha-textfield");
+const tfX = createEditorInput();
 tfX.type = "number";
 tfX.label = "Position X (%)";
 tfX.step = "1";
@@ -11713,12 +13640,12 @@ tfX.value = String(this._badgeDraft.x ?? 0);
 tfX.addEventListener("input", (e) => {
   e.stopPropagation();
   //this._badgeDraft.x = Number(tfX.value);
-  this._badgeDraft.y = this._toNum(tfX.value, 0);
+  this._badgeDraft.x = this._toNum(tfX.value, 0);
   this._applyBadgeDraftPreview(); // move instantly
 });
 rowXY.appendChild(tfX);
 
-const tfY = document.createElement("ha-textfield");
+const tfY = createEditorInput();
 tfY.type = "number";
 tfY.label = "Position Y (%)";
 tfY.step = "1";
@@ -11892,7 +13819,7 @@ imgSec.appendChild(imgTop);
 const rowUrl = document.createElement("div");
 rowUrl.className = "draftGrid1";
 
-const tfImgUrl = document.createElement("ha-textfield");
+const tfImgUrl = createEditorInput();
 tfImgUrl.label = "Image URL / path";
 tfImgUrl.placeholder = "/local/my.png or https://...";
 tfImgUrl.value = this._badgeDraft.img_url || "";
@@ -11926,7 +13853,7 @@ const rowFit = document.createElement("div");
     const rowImgNums = document.createElement("div");
     rowImgNums.className = "draftGrid2";
 
-    const tfImgOpacity = document.createElement("ha-textfield");
+    const tfImgOpacity = createEditorInput();
     tfImgOpacity.type = "number";
     tfImgOpacity.label = "Image opacity (0-1)";
     tfImgOpacity.step = "0.05";
@@ -11939,7 +13866,7 @@ const rowFit = document.createElement("div");
     });
     rowImgNums.appendChild(tfImgOpacity);
 
-    const tfImgRadius = document.createElement("ha-textfield");
+    const tfImgRadius = createEditorInput();
     tfImgRadius.type = "number";
     tfImgRadius.label = "Image radius";
     tfImgRadius.step = "1";
@@ -11988,22 +13915,22 @@ const rowFit = document.createElement("div");
     const rowTintFrame = document.createElement("div");
     rowTintFrame.className = "draftGrid2";
 
-    const tfTintColor = document.createElement("ha-textfield");
+    const tfTintColor = createEditorInput();
     tfTintColor.label = "Tint color";
     tfTintColor.placeholder = "#000000";
     tfTintColor.value = this._badgeDraft.img_tint_color || "#000000";
-    tfTintColor.addEventListener("input", (e) => { e.stopPropagation(); this._badgeDraft.img_tint_color = tfTintColor.value; tintPick.value = normalizeHex(tfTintColor.value || "#000000", "#000000").slice(0,7); this._applyBadgeDraftPreview(); });
+    tfTintColor.addEventListener("input", (e) => { e.stopPropagation(); this._badgeDraft.img_tint_color = tfTintColor.value; tintPick.value = toPickerHex(tfTintColor.value || "#000000", "#000000"); this._applyBadgeDraftPreview(); });
     tfTintColor.addEventListener("click", stopBubble);
     rowTintFrame.appendChild(tfTintColor);
 
     const tintPick = document.createElement("input");
     tintPick.type = "color";
     tintPick.className = "colorBtn";
-    try { tintPick.value = normalizeHex(String(tfTintColor.value || ""), "#000000").slice(0,7); } catch(_) { tintPick.value = "#000000"; }
+    try { tintPick.value = toPickerHex(String(tfTintColor.value || ""), "#000000"); } catch(_) { tintPick.value = "#000000"; }
     tintPick.addEventListener("input", (e) => { e.stopPropagation(); tfTintColor.value = tintPick.value; this._badgeDraft.img_tint_color = tfTintColor.value; this._applyBadgeDraftPreview(); });
     rowTintFrame.appendChild(tintPick);
 
-    const tfTintOp = document.createElement("ha-textfield");
+    const tfTintOp = createEditorInput();
     tfTintOp.type = "number";
     tfTintOp.label = "Tint opacity (0-1)";
     tfTintOp.step = "0.05";
@@ -12011,22 +13938,22 @@ const rowFit = document.createElement("div");
     tfTintOp.addEventListener("input", (e) => { e.stopPropagation(); const v=parseFloat(tfTintOp.value); this._badgeDraft.img_tint_opacity = Number.isFinite(v)?v:0; this._applyBadgeDraftPreview(); });
     rowTintFrame.appendChild(tfTintOp);
 
-    const tfFrameColor = document.createElement("ha-textfield");
+    const tfFrameColor = createEditorInput();
     tfFrameColor.label = "Frame color";
     tfFrameColor.placeholder = "rgba(...) or #RRGGBB";
     tfFrameColor.value = this._badgeDraft.img_frame_color || "rgba(255,255,255,0.22)";
-    tfFrameColor.addEventListener("input", (e) => { e.stopPropagation(); this._badgeDraft.img_frame_color = tfFrameColor.value; framePick.value = normalizeHex(tfFrameColor.value || "#ffffff", "#ffffff").slice(0,7); this._applyBadgeDraftPreview(); });
+    tfFrameColor.addEventListener("input", (e) => { e.stopPropagation(); this._badgeDraft.img_frame_color = tfFrameColor.value; framePick.value = toPickerHex(tfFrameColor.value || "#ffffff", "#ffffff"); this._applyBadgeDraftPreview(); });
     tfFrameColor.addEventListener("click", stopBubble);
     rowTintFrame.appendChild(tfFrameColor);
 
     const framePick = document.createElement("input");
     framePick.type = "color";
     framePick.className = "colorBtn";
-    try { framePick.value = normalizeHex(String(tfFrameColor.value || ""), "#ffffff").slice(0,7); } catch(_) { framePick.value = "#ffffff"; }
+    try { framePick.value = toPickerHex(String(tfFrameColor.value || ""), "#ffffff"); } catch(_) { framePick.value = "#ffffff"; }
     framePick.addEventListener("input", (e) => { e.stopPropagation(); tfFrameColor.value = framePick.value; this._badgeDraft.img_frame_color = tfFrameColor.value; this._applyBadgeDraftPreview(); });
     rowTintFrame.appendChild(framePick);
 
-    const tfFrameW = document.createElement("ha-textfield");
+    const tfFrameW = createEditorInput();
     tfFrameW.type = "number";
     tfFrameW.label = "Frame width";
     tfFrameW.step = "1";
@@ -12052,7 +13979,7 @@ const rowFit = document.createElement("div");
     ffDimB.appendChild(swDimB);
     rowDim.appendChild(ffDimB);
 
-    const tfDimFac = document.createElement("ha-textfield");
+    const tfDimFac = createEditorInput();
     tfDimFac.type = "number";
     tfDimFac.label = "Dim factor (0-1)";
     tfDimFac.step = "0.05";
@@ -12155,7 +14082,7 @@ box.appendChild(grid2);
 const fanBadgeBox = document.createElement("div");
 fanBadgeBox.className = "fanBadgeBox";
 
-const tfBlade = document.createElement("ha-textfield");
+const tfBlade = createEditorInput();
 tfBlade.type = "number";
 tfBlade.label = "Blade count (Fan/Heatpump)";
 tfBlade.min = "2";
@@ -12260,7 +14187,7 @@ sliderBox.appendChild(sRow2);
 const sRow3 = document.createElement("div");
 sRow3.className = "draftGrid3";
 
-const tfSMin = document.createElement("ha-textfield");
+const tfSMin = createEditorInput();
 tfSMin.type = "number";
 tfSMin.label = "Min (optional)";
 tfSMin.placeholder = "auto";
@@ -12268,7 +14195,7 @@ tfSMin.value = (this._badgeDraft.slider_min == null) ? "" : String(this._badgeDr
 tfSMin.addEventListener("input", (e) => { e.stopPropagation(); const v = parseFloat(tfSMin.value); this._badgeDraft.slider_min = Number.isFinite(v) ? v : null; this._applyBadgeDraftPreview(); });
 sRow3.appendChild(tfSMin);
 
-const tfSMax = document.createElement("ha-textfield");
+const tfSMax = createEditorInput();
 tfSMax.type = "number";
 tfSMax.label = "Max (optional)";
 tfSMax.placeholder = "auto";
@@ -12276,7 +14203,7 @@ tfSMax.value = (this._badgeDraft.slider_max == null) ? "" : String(this._badgeDr
 tfSMax.addEventListener("input", (e) => { e.stopPropagation(); const v = parseFloat(tfSMax.value); this._badgeDraft.slider_max = Number.isFinite(v) ? v : null; this._applyBadgeDraftPreview(); });
 sRow3.appendChild(tfSMax);
 
-const tfSStep = document.createElement("ha-textfield");
+const tfSStep = createEditorInput();
 tfSStep.type = "number";
 tfSStep.label = "Step (optional)";
 tfSStep.placeholder = "auto";
@@ -12290,7 +14217,7 @@ sliderBox.appendChild(sRow3);
 const sRow4 = document.createElement("div");
 sRow4.className = "draftGrid3";
 
-const tfLen = document.createElement("ha-textfield");
+const tfLen = createEditorInput();
 tfLen.type = "number";
 tfLen.label = "Length (px)";
 tfLen.placeholder = "auto";
@@ -12298,7 +14225,7 @@ tfLen.value = (this._badgeDraft.slider_length == null) ? "" : String(this._badge
 tfLen.addEventListener("input", (e) => { e.stopPropagation(); const v=parseFloat(tfLen.value); this._badgeDraft.slider_length = Number.isFinite(v) ? v : null; this._applyBadgeDraftPreview(); });
 sRow4.appendChild(tfLen);
 
-const tfThk = document.createElement("ha-textfield");
+const tfThk = createEditorInput();
 tfThk.type = "number";
 tfThk.label = "Track thickness (px)";
 tfThk.placeholder = "6";
@@ -12306,7 +14233,7 @@ tfThk.value = (this._badgeDraft.slider_thickness == null) ? "" : String(this._ba
 tfThk.addEventListener("input", (e) => { e.stopPropagation(); const v=parseFloat(tfThk.value); this._badgeDraft.slider_thickness = Number.isFinite(v) ? v : null; this._applyBadgeDraftPreview(); });
 sRow4.appendChild(tfThk);
 
-const tfThumb = document.createElement("ha-textfield");
+const tfThumb = createEditorInput();
 tfThumb.type = "number";
 tfThumb.label = "Thumb size (px)";
 tfThumb.placeholder = "18";
@@ -12319,7 +14246,7 @@ sliderBox.appendChild(sRow4);
 const sRow5 = document.createElement("div");
 sRow5.className = "draftGrid3";
 
-const tfThumbCol = document.createElement("ha-textfield");
+const tfThumbCol = createEditorInput();
 tfThumbCol.label = "Thumb color";
 tfThumbCol.placeholder = "#FFFFFF";
 tfThumbCol.value = this._badgeDraft.slider_thumb_color || "";
@@ -12329,11 +14256,11 @@ sRow5.appendChild(tfThumbCol);
 const thumbPick = document.createElement("input");
 thumbPick.type = "color";
 thumbPick.className = "colorBtn";
-try { thumbPick.value = normalizeHex(String(tfThumbCol.value || ""), "#ffffff").slice(0,7); } catch(_) { thumbPick.value = "#ffffff"; }
+try { thumbPick.value = toPickerHex(String(tfThumbCol.value || ""), "#ffffff"); } catch(_) { thumbPick.value = "#ffffff"; }
 thumbPick.addEventListener("input", (e) => { e.stopPropagation(); tfThumbCol.value = thumbPick.value; this._badgeDraft.slider_thumb_color = tfThumbCol.value; this._applyBadgeDraftPreview(); });
 sRow5.appendChild(thumbPick);
 
-const tfThumbRad = document.createElement("ha-textfield");
+const tfThumbRad = createEditorInput();
 tfThumbRad.type = "number";
 tfThumbRad.label = "Thumb radius (px)";
 tfThumbRad.placeholder = "999";
@@ -12346,7 +14273,7 @@ sliderBox.appendChild(sRow5);
 const sRow6 = document.createElement("div");
 sRow6.className = "draftGrid3";
 
-const tfTrackCol = document.createElement("ha-textfield");
+const tfTrackCol = createEditorInput();
 tfTrackCol.label = "Track color";
 tfTrackCol.placeholder = "rgba(...) or #RRGGBB";
 tfTrackCol.value = this._badgeDraft.slider_track_color || "";
@@ -12356,11 +14283,11 @@ sRow6.appendChild(tfTrackCol);
 const trackPick = document.createElement("input");
 trackPick.type = "color";
 trackPick.className = "colorBtn";
-try { trackPick.value = normalizeHex(String(tfTrackCol.value || ""), "#ffffff").slice(0,7); } catch(_) { trackPick.value = "#ffffff"; }
+try { trackPick.value = toPickerHex(String(tfTrackCol.value || ""), "#ffffff"); } catch(_) { trackPick.value = "#ffffff"; }
 trackPick.addEventListener("input", (e) => { e.stopPropagation(); tfTrackCol.value = trackPick.value; this._badgeDraft.slider_track_color = tfTrackCol.value; this._applyBadgeDraftPreview(); });
 sRow6.appendChild(trackPick);
 
-const tfTrackRad = document.createElement("ha-textfield");
+const tfTrackRad = createEditorInput();
 tfTrackRad.type = "number";
 tfTrackRad.label = "Track radius (px)";
 tfTrackRad.placeholder = "999";
@@ -12473,7 +14400,7 @@ svcRow.appendChild(svcPicker);
 svcBox.appendChild(svcRow);
 
 // Manual service input
-const tfSvc = document.createElement("ha-textfield");
+const tfSvc = createEditorInput();
 tfSvc.label = "Service (domain.service)";
 tfSvc.value = this._badgeDraft.tap_action?.service || "";
 tfSvc.addEventListener("input", (e) => {
@@ -12488,7 +14415,7 @@ tfSvc.addEventListener("click", stopBubble);
 svcBox.appendChild(tfSvc);
 
 // Service data
-const tfData = document.createElement("ha-textfield");
+const tfData = createEditorInput();
 tfData.label = "Service data (optional JSON)";
 tfData.value = (typeof this._badgeDraft.tap_action?.service_data === "string")
   ? this._badgeDraft.tap_action.service_data
@@ -12529,7 +14456,7 @@ box.appendChild(svcBox);
     const grid3 = document.createElement("div");
     grid3.className = "grid3";
 
-    const tfPad = document.createElement("ha-textfield");
+    const tfPad = createEditorInput();
     tfPad.type = "number";
     tfPad.label = "Padding (px)";
     tfPad.step = "1";
@@ -12537,7 +14464,7 @@ box.appendChild(svcBox);
     tfPad.addEventListener("input", (e) => { e.stopPropagation(); this._badgeDraft.padding = Number(tfPad.value); this._applyBadgeDraftPreview(); updateAnimVisibility(); });
     grid3.appendChild(tfPad);
 
-    const tfRad = document.createElement("ha-textfield");
+    const tfRad = createEditorInput();
     tfRad.type = "number";
     tfRad.label = "Radius (px)";
     tfRad.step = "1";
@@ -12545,7 +14472,7 @@ box.appendChild(svcBox);
     tfRad.addEventListener("input", (e) => { e.stopPropagation(); this._badgeDraft.radius = Number(tfRad.value); this._applyBadgeDraftPreview(); updateAnimVisibility(); });
     grid3.appendChild(tfRad);
 
-    const tfFs = document.createElement("ha-textfield");
+    const tfFs = createEditorInput();
     tfFs.type = "number";
     tfFs.label = "Font size (px)";
     tfFs.step = "1";
@@ -12553,7 +14480,7 @@ box.appendChild(svcBox);
     tfFs.addEventListener("input", (e) => { e.stopPropagation(); this._badgeDraft.font_size = Number(tfFs.value); this._applyBadgeDraftPreview(); updateAnimVisibility(); });
     grid3.appendChild(tfFs);
 
-    const tfIco = document.createElement("ha-textfield");
+    const tfIco = createEditorInput();
     tfIco.type = "number";
     tfIco.label = "Icon size (px)";
     tfIco.step = "1";
@@ -12561,7 +14488,7 @@ box.appendChild(svcBox);
     tfIco.addEventListener("input", (e) => { e.stopPropagation(); this._badgeDraft.icon_size = Number(tfIco.value); this._applyBadgeDraftPreview(); updateAnimVisibility(); });
     grid3.appendChild(tfIco);
 
-    const tfFixW = document.createElement("ha-textfield");
+    const tfFixW = createEditorInput();
     tfFixW.type = "number";
     tfFixW.label = "Fixed width (px, optional)";
     tfFixW.step = "1";
@@ -12576,7 +14503,7 @@ box.appendChild(svcBox);
 
     box.appendChild(grid3);
 
-    const tfDec = document.createElement("ha-textfield");
+    const tfDec = createEditorInput();
     tfDec.type = "number";
     tfDec.label = "Decimals (optional)";
     tfDec.step = "1";
@@ -12594,7 +14521,7 @@ const mkBadgeColor = (label, key, fallback) => {
   const row = document.createElement("div");
   row.className = "colorRow";
 
-  const tf = document.createElement("ha-textfield");
+  const tf = createEditorInput();
   tf.label = label;
   tf.value = String(this._badgeDraft[key] ?? "");
   tf.addEventListener("input", (e) => { e.stopPropagation(); this._badgeDraft[key] = tf.value; this._applyBadgeDraftPreview(); updateAnimVisibility(); });
@@ -12608,13 +14535,13 @@ const mkBadgeColor = (label, key, fallback) => {
   let base = normalizeHex(cur, fallback);
   if (/^#[0-9a-fA-F]{8}$/.test(cur)) {
     alpha = cur.slice(7, 9);
-    base = cur.slice(0, 7);
+    base = toPickerHex(cur, fallback);
   } else if (/^#[0-9a-fA-F]{8}$/.test(base)) {
     alpha = base.slice(7, 9);
-    base = base.slice(0, 7);
+    base = toPickerHex(base, fallback);
   }
   // input[type=color] expects 6-digit hex
-  btn.value = normalizeHex(base, fallback).slice(0, 7);
+  btn.value = toPickerHex(base, fallback);
 
   btn.addEventListener("input", (e) => {
     e.stopPropagation();
@@ -12635,7 +14562,7 @@ box.appendChild(mkBadgeColor("Text color", "text_color", "#ffffff"));
 box.appendChild(mkBadgeColor("Border color", "border_color", "#ffffff"));
 
 // Opacity (optional)
-const tfOp = document.createElement("ha-textfield");
+const tfOp = createEditorInput();
 tfOp.type = "number";
 tfOp.step = "0.05";
 tfOp.label = "Opacity (optional)";
@@ -12680,7 +14607,7 @@ const mkIntColor = (label, getVal, setVal, fallback) => {
   const row = document.createElement("div");
   row.className = "colorRow";
 
-  const tf = document.createElement("ha-textfield");
+  const tf = createEditorInput();
   tf.label = label;
 
   const btn = document.createElement("input");
@@ -12689,13 +14616,13 @@ const mkIntColor = (label, getVal, setVal, fallback) => {
 
   const cur = normalizeHex(getVal(), fallback || "#00ff00");
   tf.value = String(cur).toUpperCase();
-  btn.value = String(cur).slice(0, 7);
+  btn.value = toPickerHex(cur, fallback || "#00ff00");
 
   tf.addEventListener("change", (e) => {
     e.stopPropagation();
     const n = normalizeHex(tf.value, cur).toUpperCase();
     tf.value = n;
-    btn.value = n.slice(0, 7);
+    btn.value = toPickerHex(n, fallback || "#00ff00");
     setVal(n);
     this._applyBadgeDraftPreview();
   });
@@ -12823,7 +14750,7 @@ const renderBadgeIntervals = () => {
     const g = document.createElement("div");
     g.className = "badgeIntEditGrid";
 
-    const tfMatch2 = document.createElement("ha-textfield");
+    const tfMatch2 = createEditorInput();
     tfMatch2.label = "Match value (optional)";
     tfMatch2.placeholder = "e.g. on / off / open";
     tfMatch2.value = String(draft.match ?? "");
@@ -12835,7 +14762,7 @@ const renderBadgeIntervals = () => {
     });
     g.appendChild(tfMatch2);
 
-    const tfTo2 = document.createElement("ha-textfield");
+    const tfTo2 = createEditorInput();
     tfTo2.type = "number";
     tfTo2.step = "0.1";
     tfTo2.label = "Upper bound (≤)";
@@ -12865,7 +14792,7 @@ const renderBadgeIntervals = () => {
 
     editBox.appendChild(g);
 
-    const tfNewVal2 = document.createElement("ha-textfield");
+    const tfNewVal2 = createEditorInput();
     tfNewVal2.label = "New value (optional) support variables. Replaces badge value";
     tfNewVal2.placeholder = "e.g. Temperature: <value>";
     tfNewVal2.helperText = "Overrides the value that <value> expands to for this badge while this interval is active. Supports <value>, <state>, <name>, <unit>, <attr:xxx>, etc.";
@@ -12895,7 +14822,7 @@ const renderBadgeIntervals = () => {
       });
       if (this._hass) itIconEl2.hass = this._hass;
     } else {
-      itIconEl2 = document.createElement("ha-textfield");
+      itIconEl2 = createEditorInput();
       itIconEl2.label = "Icon (optional) (mdi:...)";
       itIconEl2.helperText = "If set, overrides the badge icon while this interval is active.";
       itIconEl2.persistentHelperText = true;
@@ -12914,7 +14841,7 @@ const renderBadgeIntervals = () => {
       const row = document.createElement("div");
       row.className = "colorRow";
 
-      const tf = document.createElement("ha-textfield");
+      const tf = createEditorInput();
       tf.label = label;
       tf.placeholder = "(optional)";
       tf.value = String(draft[key] ?? "");
@@ -12922,7 +14849,7 @@ const renderBadgeIntervals = () => {
       const btn = document.createElement("input");
       btn.type = "color";
       btn.className = "colorBtn";
-      btn.value = normalizeHex(tf.value || fallback, fallback).slice(0, 7);
+      btn.value = toPickerHex(tf.value || fallback, fallback);
 
       tf.addEventListener("change", (e) => {
         e.stopPropagation();
@@ -12933,7 +14860,7 @@ const renderBadgeIntervals = () => {
           const n = normalizeHex(v, fallback).toUpperCase();
           tf.value = n;
           draft[key] = n;
-          btn.value = n.slice(0, 7);
+          btn.value = toPickerHex(n, fallback);
         }
         this._badgeIntervalDraft = draft;
         this._applyBadgeDraftPreview();
@@ -13017,6 +14944,8 @@ const renderBadgeIntervals = () => {
   }
 
   intSec.appendChild(body);
+  this._decorateEditorFieldLabels(intSec);
+  this._decorateColorRows(intSec);
 };
 
 btnAddInt.addEventListener("click", (e) => {
@@ -13034,6 +14963,8 @@ btnAddInt.addEventListener("click", (e) => {
 
 renderBadgeIntervals();
 box.appendChild(intSec);
+    this._decorateEditorFieldLabels(box);
+    this._decorateColorRows(box);
 
 
 
@@ -13056,6 +14987,8 @@ box.appendChild(intSec);
     actions.appendChild(btnCancel);
     actions.appendChild(btnSave);
     box.appendChild(actions);
+    this._decorateEditorFieldLabels(box);
+    this._decorateColorRows(box);
   }
 
   // --- Badge placement helper: center badge in HA visual preview (useful when the preview is scrollable) ---
@@ -13231,7 +15164,9 @@ _centerBadgePreviewNow(badgeOrObj) {
   }
 
   _onChange(ev) {
-    const target = ev.target;
+    // Web Awesome based HA controls can expose an internal element as target.
+    // currentTarget is the editor control that owns configValue.
+    const target = ev.currentTarget || ev.target;
     const key = target.configValue || target.dataset?.configValue;
     if (!key) return;
 
@@ -13245,6 +15180,8 @@ _centerBadgePreviewNow(badgeOrObj) {
 
       const isSpecialNew = (newSym === "gate" || newSym === "garage_door" || newSym === "blind");
       const isSpecialOld = (oldSym === "gate" || oldSym === "garage_door" || oldSym === "blind");
+      const isWindNew = (newSym === "wind_direction");
+      const isSunFlowNew = (newSym === "sun_flow");
 
       if (isSpecialNew && !isSpecialOld) {
         const curMin = Number(this._config?.min);
@@ -13259,6 +15196,36 @@ _centerBadgePreviewNow(badgeOrObj) {
           try { if (this._elMax) this._elMax.value = "1"; } catch (_) {}
         }
       }
+      if (isWindNew) {
+        this._commit("wind_show_degrees", true);
+        this._commit("wind_show_direction", true);
+        this._commit("wind_show_direction_markers", true);
+
+        const curMin = Number(this._config?.min);
+        const curMax = Number(this._config?.max);
+        const minLooksDefault = (!Number.isFinite(curMin) || Math.abs(curMin - 0) < 1e-9);
+        const maxLooksDefault = (!Number.isFinite(curMax) || Math.abs(curMax - 100) < 1e-9 || Math.abs(curMax - 1) < 1e-9);
+        if (minLooksDefault) {
+          this._commit("min", 0);
+          try { if (this._elMin) this._elMin.value = "0"; } catch (_) {}
+        }
+        if (maxLooksDefault) {
+          this._commit("max", 360);
+          try { if (this._elMax) this._elMax.value = "360"; } catch (_) {}
+        }
+        this._commit("show_scale", true);
+        this._commit("value_position", "hide");
+        try { if (this._swScale) this._swScale.checked = true; } catch (_) {}
+        try { if (this._elValuePos) this._elValuePos.value = "hide"; } catch (_) {}
+      }
+      if (isSunFlowNew) {
+        if (!String(this._config?.entity || "").trim()) {
+          this._commit("entity", "sun.sun");
+          try { if (this._elEntity) this._elEntity.value = "sun.sun"; } catch (_) {}
+        }
+        this._commit("value_position", "hide");
+        try { if (this._elValuePos) this._elValuePos.value = "hide"; } catch (_) {}
+      }
       return;
     }
 
@@ -13271,11 +15238,11 @@ _centerBadgePreviewNow(badgeOrObj) {
 
     let value = this._eventValue(ev, target);
 //v1.0.2
-    if (key === "min" || key === "max" || key === "value_font_size" || key === "name_font_size" || key === "stats_hours" || key === "card_scale" || key === "segment_gap" || key === "name_offset_x" || key === "name_offset_y" || key === "value_offset_x" || key === "value_offset_y" || key === "tap_confirm_open_window" || key === "fan_blade_count") {
+    if (key === "min" || key === "max" || key === "value_font_size" || key === "name_font_size" || key === "stats_hours" || key === "card_scale" || key === "segment_gap" || key === "name_offset_x" || key === "name_offset_y" || key === "value_offset_x" || key === "value_offset_y" || key === "tap_confirm_open_window" || key === "fan_blade_count" || key === "wind_degree_font_size" || key === "wind_direction_font_size" || key === "wind_direction_marker_font_size" || key === "wind_outline_width" || key === "wind_arrow_size" || key === "wind_arrow_thickness" || key === "wind_gauge_min" || key === "wind_gauge_max" || key === "wind_gauge_decimals" || key === "wind_gauge_opacity" || key === "wind_gauge_track_opacity" || key === "wind_gauge_arc_width" || key === "wind_gauge_font_size" || key === "sunflow_glow_strength" || key === "sunflow_sun_size" || key === "sunflow_arc_width" || key === "sunflow_font_scale") {
       const raw = String(value ?? "").trim();
 
       // Allow typing negative/decimal values without the editor forcing "0" mid-input.
-      // Home Assistant textfields may emit value-changed on each keystroke.
+      // Home Assistant inputs may emit value-changed on each keystroke.
       if (raw === "-" || raw === "+" || raw === "-," || raw === "-." || raw === "+," || raw === "+.") {
         return;
       }
@@ -13290,6 +15257,18 @@ _centerBadgePreviewNow(badgeOrObj) {
         value = Number.isFinite(n) ? n : Number(raw);
         if (!Number.isFinite(value)) value = 0;
       }
+      if (key === "wind_outline_width") value = clamp(value, 0, 16);
+      if (key === "wind_arrow_size") value = clamp(value, 25, 100);
+      if (key === "wind_arrow_thickness") value = clamp(value, 40, 200);
+      if (key === "wind_direction_marker_font_size") value = clamp(value, 8, 24);
+      if (key === "wind_gauge_decimals") value = clampInt(value, 0, 3, 1);
+      if (key === "wind_gauge_opacity" || key === "wind_gauge_track_opacity") value = clamp(value, 0, 100);
+      if (key === "wind_gauge_arc_width") value = clamp(value, 1, 12);
+      if (key === "wind_gauge_font_size") value = clamp(value, 6, 14);
+      if (key === "sunflow_glow_strength") value = clamp(value, 0, 100);
+      if (key === "sunflow_sun_size") value = clamp(value, 7, 26);
+      if (key === "sunflow_arc_width") value = clamp(value, 0.5, 10);
+      if (key === "sunflow_font_scale") value = clamp(value, 60, 160);
       return this._commit(key, value);
     }
     if (key === "decimals") {
