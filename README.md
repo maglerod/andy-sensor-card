@@ -1,9 +1,11 @@
-# Andy Sensor Card - v1.0.7
+# Andy Sensor Card - v1.0.8
 A **highly configurable** Home Assistant Lovelace card that renders **advanced SVG symbols with animations** (garage doors, blinds, tanks, batteries, gates, fan/heatpump, images…) and lets you place (drag & drop) **badges anywhere** - with actions, images and sliders and much more.
 
 > Built for dashboards where “a simple icon + value” isn’t enough.
 
 
+![Preview 1_0_5](Images/winddirection.png)
+![Preview 1_0_5_2](Images/sunflow.png)
 ![Preview 1_0_5](Images/fan.png)
 ![Preview 1_0_5_2](Images/heatpump.png)
 ![Preview 1_0_5ws](Images/washmachine.png)
