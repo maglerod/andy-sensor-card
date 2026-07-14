@@ -26,6 +26,11 @@ A **highly configurable** Home Assistant Lovelace card that renders **advanced S
 ## ✨ Highlights
 
 ### Advanced symbols (built-in)
+New in 1.0.8
+- **Wind direction compass style with lots of adjustments
+- **SunFlow card that you can use with built in sun sensor or your own entities with lots of adjustments
+
+  
 - **Wash machine & Tumble dryer** with animation and speed handling
 - **Window** Symbol with close/open support and separate blind and lamp entity  
 - **Garage door** (single/double) with optional **inside lamp glow**, per-door widths, gap, and independent click actions, with lock safety functions for accidentally opening.
