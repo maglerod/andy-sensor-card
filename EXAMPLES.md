@@ -989,46 +989,19 @@ cards:
 ### SunFlow — plain
 
 ```yaml
-name: Sensor
+type: custom:andy-sensor-card
+name: SunFlow
 entity: sun.sun
-entity2: ""
-badge_drag_enabled: false
 symbol: sun_flow
-min: 0
-max: 100
-unit: ""
-decimals: 0
 value_position: hide
-value_font_size: 0
-name_font_size: 0
-glass: true
-orientation: vertical
-show_scale: false
-sunflow_sun_entity: ""
-sunflow_sunrise_entity: ""
-sunflow_sunset_entity: ""
-sunflow_elevation_entity: ""
-sunflow_azimuth_entity: ""
-sunflow_rising_entity: ""
 sunflow_show_sunrise: true
 sunflow_show_sunset: true
 sunflow_show_daylight: true
 sunflow_show_now: true
 sunflow_show_elevation: true
-sunflow_show_azimuth: false
+sunflow_show_azimuth: true
 sunflow_show_remaining: true
 sunflow_show_scale: true
-sunflow_sunrise_label: Sunrise
-sunflow_sunset_label: Sunset
-sunflow_daylight_label: Daylight
-sunflow_now_label: Now
-sunflow_elevation_label: Elevation
-sunflow_azimuth_label: Azimuth
-sunflow_remaining_label: remaining
-sunflow_until_sunrise_label: until sunrise
-sunflow_hours_label: h
-sunflow_minutes_label: min
-sunflow_unavailable_label: Sun data unavailable
 sunflow_glow_strength: 85
 sunflow_sun_size: 14
 sunflow_arc_width: 2.5
@@ -1036,90 +1009,10 @@ sunflow_font_scale: 100
 sunflow_value_color: "#ffffff"
 sunflow_sunrise_color: "#ffffff"
 sunflow_sunset_color: "#ffffff"
-sunflow_remaining_color: "#ffffff"
+sunflow_remaining_color: "#fbbf24"
 sunflow_remaining_outline: true
 sunflow_remaining_outline_color: "#000000"
 sunflow_secondary_color: "#ffffff"
-scale_color_mode: per_interval
-show_stats: false
-stats_hours: 24
-card_scale: 2
-card_width: "400"
-card_height: ""
-intervals:
-  - id: it0
-    to: 0
-    color: "#ef4444"
-    outline: "#ffffff"
-    scale_color: "#ef4444"
-    gradient:
-      enabled: false
-      from: "#ef4444"
-      to: "#ef4444"
-    match: ""
-    new_value: ""
-    icon: ""
-    icon_color: ""
-    seconds: null
-  - id: it1
-    to: 20
-    color: "#f59e0b"
-    outline: "#ffffff"
-    scale_color: "#f59e0b"
-    gradient:
-      enabled: false
-      from: "#f59e0b"
-      to: "#f59e0b"
-    match: ""
-    new_value: ""
-    icon: ""
-    icon_color: ""
-    seconds: null
-  - id: it2
-    to: 40
-    color: "#fbbf24"
-    outline: "#ffffff"
-    scale_color: "#fbbf24"
-    gradient:
-      enabled: false
-      from: "#fbbf24"
-      to: "#fbbf24"
-    match: ""
-    new_value: ""
-    icon: ""
-    icon_color: ""
-    seconds: null
-  - id: it3
-    to: 60
-    color: "#22c55e"
-    outline: "#ffffff"
-    scale_color: "#22c55e"
-    gradient:
-      enabled: false
-      from: "#22c55e"
-      to: "#22c55e"
-    match: ""
-    new_value: ""
-    icon: ""
-    icon_color: ""
-    seconds: null
-  - id: it4
-    to: 100
-    color: "#16a34a"
-    outline: "#ffffff"
-    scale_color: "#16a34a"
-    gradient:
-      enabled: false
-      from: "#16a34a"
-      to: "#16a34a"
-    match: ""
-    new_value: ""
-    icon: ""
-    icon_color: ""
-    seconds: null
-badges: []
-type: custom:andy-sensor-card
-
 ```
 
 ---
