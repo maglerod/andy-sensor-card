@@ -24,10 +24,10 @@ Each example is shown as properly formatted YAML so it’s easy to copy into you
   - [Heatpump — Climate entity](#heatpump--climate-entity)
   - [Heatpump — Binary sensor + match intervals](#heatpump--binary-sensor--match-intervals)
 - [WindDirection](#winddirection)
-  - [WindDirection — with current speed & max in a vertical stack](#winddirection--speed--vertical--stack)
+  - [WindDirection — with current speed & max in a vertical stack](#winddirection--speed)
   - [WindDirection plain](#winddirection--plain)
 - [SunFlow](#sunflow)
-  - [SunFlow — with intervals and vertical stack](#sunflow--intervals--vertical--stack)
+  - [SunFlow — with intervals and vertical stack](#sunflow--intervals)
   - [SunFLow plain](#sunflow--plain)
 
 
