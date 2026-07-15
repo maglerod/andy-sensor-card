@@ -490,7 +490,7 @@ intervals:
 
 ## WindDirection
 
-### WindDirection — speed vertical stack
+### WindDirection — speed
 
 ```yaml
 type: vertical-stack
@@ -832,7 +832,7 @@ type: custom:andy-sensor-card
 
 ## SunFlow
 
-### SunFlow — intervals vertical stack
+### SunFlow — intervals
 
 ```yaml
 type: vertical-stack
