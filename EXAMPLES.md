@@ -829,10 +829,6 @@ type: custom:andy-sensor-card
 
 ---
 
-- [SunFlow](#sunflow)
-  - [SunFlow — with intervals and vertical stack](#sunflow--intervals--vertical--stack)
-  - [SunFLow plain](#sunflow--plain)
-
 
 ## SunFlow
 
