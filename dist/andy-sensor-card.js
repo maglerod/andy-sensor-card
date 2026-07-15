@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.8.1
+ * Andy Sensor Card v1.0.8.2
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -17,7 +17,7 @@
 */
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.8.1";
+const CARD_VERSION = "1.0.8.2";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
 
 //console.info(CARD_TAGLINE);
@@ -955,6 +955,7 @@ this._gateAnimRaf = 0;
       wind_outline_width: 3.2,
       wind_arrow_size: 82,
       wind_arrow_thickness: 100,
+      wind_arrow_inward: false,
       wind_gauge_enabled: false,
       wind_gauge_show_values: true,
       wind_gauge_show_scale: false,
@@ -989,6 +990,7 @@ this._gateAnimRaf = 0;
       sunflow_show_azimuth: false,
       sunflow_show_remaining: true,
       sunflow_show_scale: true,
+      sunflow_12_hour_format: false,
       sunflow_sunrise_label: "Sunrise",
       sunflow_sunset_label: "Sunset",
       sunflow_daylight_label: "Daylight",
@@ -1156,6 +1158,7 @@ const rawSym = String(this._config.symbol || "battery_liquid");
     this._config.wind_show_degrees = (typeof this._config.wind_show_degrees === "boolean") ? this._config.wind_show_degrees : true;
     this._config.wind_show_direction = (typeof this._config.wind_show_direction === "boolean") ? this._config.wind_show_direction : true;
     this._config.wind_show_direction_markers = (typeof this._config.wind_show_direction_markers === "boolean") ? this._config.wind_show_direction_markers : true;
+    this._config.wind_arrow_inward = this._config.wind_arrow_inward === true;
     this._config.wind_direction_language = normalizeWindDirectionLanguage(this._config.wind_direction_language);
     this._config.wind_gauge_enabled = (typeof this._config.wind_gauge_enabled === "boolean") ? this._config.wind_gauge_enabled : false;
     this._config.wind_gauge_show_values = (typeof this._config.wind_gauge_show_values === "boolean") ? this._config.wind_gauge_show_values : true;
@@ -1188,6 +1191,7 @@ const rawSym = String(this._config.symbol || "battery_liquid");
       "sunflow_show_scale",
     ].forEach((key) => { this._config[key] = this._config[key] !== false; });
     this._config.sunflow_show_azimuth = this._config.sunflow_show_azimuth === true;
+    this._config.sunflow_12_hour_format = this._config.sunflow_12_hour_format === true;
     const sunFlowLabels = {
       sunflow_sunrise_label: "Sunrise",
       sunflow_sunset_label: "Sunset",
@@ -4351,13 +4355,19 @@ const root = this.renderRoot;
 
   _formatSunFlowClock(date) {
     if (!(date instanceof Date) || !Number.isFinite(date.getTime())) return "--:--";
+    const use12Hour = this._config?.sunflow_12_hour_format === true;
     try {
       return new Intl.DateTimeFormat(this.hass?.locale?.language || undefined, {
-        hour: "2-digit",
+        hour: use12Hour ? "numeric" : "2-digit",
         minute: "2-digit",
-        hourCycle: "h23",
+        ...(use12Hour ? { hour12: true } : { hourCycle: "h23" }),
       }).format(date);
     } catch (_) {
+      if (use12Hour) {
+        const hours = date.getHours();
+        const period = hours >= 12 ? "PM" : "AM";
+        return `${hours % 12 || 12}:${String(date.getMinutes()).padStart(2, "0")} ${period}`;
+      }
       return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
     }
   }
@@ -4788,7 +4798,18 @@ const root = this.renderRoot;
     const arrowHeadHalfWidth = (4 + (arrowSize * 0.075)) * arrowThicknessRatio;
     const arrowShaftHalfWidth = (1.8 + (arrowSize * 0.018)) * arrowThicknessRatio;
     const arrowHeadBaseY = arrowTipY + arrowHeadLength;
-    const arrowPath = [
+    const arrowPointsInward = this._config?.wind_arrow_inward === true;
+    const inwardHeadBaseY = arrowTailY - arrowHeadLength;
+    const arrowPath = (arrowPointsInward ? [
+      `M ${cx.toFixed(2)} ${arrowTailY.toFixed(2)}`,
+      `L ${(cx - arrowHeadHalfWidth).toFixed(2)} ${inwardHeadBaseY.toFixed(2)}`,
+      `L ${(cx - arrowShaftHalfWidth).toFixed(2)} ${inwardHeadBaseY.toFixed(2)}`,
+      `L ${(cx - arrowShaftHalfWidth).toFixed(2)} ${arrowTipY.toFixed(2)}`,
+      `L ${(cx + arrowShaftHalfWidth).toFixed(2)} ${arrowTipY.toFixed(2)}`,
+      `L ${(cx + arrowShaftHalfWidth).toFixed(2)} ${inwardHeadBaseY.toFixed(2)}`,
+      `L ${(cx + arrowHeadHalfWidth).toFixed(2)} ${inwardHeadBaseY.toFixed(2)}`,
+      "Z",
+    ] : [
       `M ${cx.toFixed(2)} ${arrowTipY.toFixed(2)}`,
       `L ${(cx - arrowHeadHalfWidth).toFixed(2)} ${arrowHeadBaseY.toFixed(2)}`,
       `L ${(cx - arrowShaftHalfWidth).toFixed(2)} ${arrowHeadBaseY.toFixed(2)}`,
@@ -4797,7 +4818,7 @@ const root = this.renderRoot;
       `L ${(cx + arrowShaftHalfWidth).toFixed(2)} ${arrowHeadBaseY.toFixed(2)}`,
       `L ${(cx + arrowHeadHalfWidth).toFixed(2)} ${arrowHeadBaseY.toFixed(2)}`,
       "Z",
-    ].join(" ");
+    ]).join(" ");
     const gradId = `windDialGrad_${this._instanceId}`;
     const shadowId = `windArrowShadow_${this._instanceId}`;
     const sheenId = `windSheen_${this._instanceId}`;
@@ -9871,6 +9892,7 @@ const DEFAULTS = {
   wind_outline_width: 3.2,
   wind_arrow_size: 82,
   wind_arrow_thickness: 100,
+  wind_arrow_inward: false,
   wind_gauge_enabled: false,
   wind_gauge_show_values: true,
   wind_gauge_show_scale: false,
@@ -9905,6 +9927,7 @@ const DEFAULTS = {
   sunflow_show_azimuth: false,
   sunflow_show_remaining: true,
   sunflow_show_scale: true,
+  sunflow_12_hour_format: false,
   sunflow_sunrise_label: "Sunrise",
   sunflow_sunset_label: "Sunset",
   sunflow_daylight_label: "Daylight",
@@ -9956,6 +9979,7 @@ class AndySensorCardEditor extends HTMLElement {
     incomingRaw.wind_show_degrees = (incomingRaw.wind_show_degrees == null) ? true : !!incomingRaw.wind_show_degrees;
     incomingRaw.wind_show_direction = (incomingRaw.wind_show_direction == null) ? true : !!incomingRaw.wind_show_direction;
     incomingRaw.wind_show_direction_markers = (incomingRaw.wind_show_direction_markers == null) ? true : !!incomingRaw.wind_show_direction_markers;
+    incomingRaw.wind_arrow_inward = incomingRaw.wind_arrow_inward === true;
     incomingRaw.wind_direction_language = normalizeWindDirectionLanguage(incomingRaw.wind_direction_language);
     incomingRaw.wind_gauge_enabled = !!incomingRaw.wind_gauge_enabled;
     incomingRaw.wind_gauge_show_values = (incomingRaw.wind_gauge_show_values == null) ? true : !!incomingRaw.wind_gauge_show_values;
@@ -9987,6 +10011,7 @@ class AndySensorCardEditor extends HTMLElement {
       "sunflow_show_scale",
     ].forEach((key) => { incomingRaw[key] = incomingRaw[key] !== false; });
     incomingRaw.sunflow_show_azimuth = incomingRaw.sunflow_show_azimuth === true;
+    incomingRaw.sunflow_12_hour_format = incomingRaw.sunflow_12_hour_format === true;
     const sunFlowLabels = {
       sunflow_sunrise_label: "Sunrise",
       sunflow_sunset_label: "Sunset",
@@ -10834,6 +10859,14 @@ const row2 = document.createElement("div");
     rowWindShape.appendChild(this._elWindArrowThickness);
     root.appendChild(rowWindShape);
 
+    const rowWindArrowDirection = document.createElement("div");
+    rowWindArrowDirection.className = "grid1";
+    const windArrowInwardSwitch = mkSwitch("Point wind arrow inward", "wind_arrow_inward");
+    this._rowWindArrowDirection = rowWindArrowDirection;
+    this._swWindArrowInward = windArrowInwardSwitch.sw;
+    rowWindArrowDirection.appendChild(windArrowInwardSwitch.wrap);
+    root.appendChild(rowWindArrowDirection);
+
     const windGaugeTitle = document.createElement("div");
     windGaugeTitle.className = "section-title";
     windGaugeTitle.textContent = "Wind gauges";
@@ -11042,11 +11075,13 @@ const row2 = document.createElement("div");
     root.appendChild(rowSunFlowToggles2);
 
     const rowSunFlowToggles3 = document.createElement("div");
-    rowSunFlowToggles3.className = "grid2";
+    rowSunFlowToggles3.className = "grid3";
     const sunFlowRemainingSwitch = mkSwitch("Show remaining time", "sunflow_show_remaining");
     const sunFlowScaleSwitch = mkSwitch("Show arc scale", "sunflow_show_scale");
+    const sunFlow12HourSwitch = mkSwitch("Use 12-hour time format", "sunflow_12_hour_format");
     rowSunFlowToggles3.appendChild(sunFlowRemainingSwitch.wrap);
     rowSunFlowToggles3.appendChild(sunFlowScaleSwitch.wrap);
+    rowSunFlowToggles3.appendChild(sunFlow12HourSwitch.wrap);
     root.appendChild(rowSunFlowToggles3);
 
     const rowSunFlowLabels1 = document.createElement("div");
@@ -11184,6 +11219,7 @@ const row2 = document.createElement("div");
       [sunFlowAzimuthSwitch.sw, "sunflow_show_azimuth"],
       [sunFlowRemainingSwitch.sw, "sunflow_show_remaining"],
       [sunFlowScaleSwitch.sw, "sunflow_show_scale"],
+      [sunFlow12HourSwitch.sw, "sunflow_12_hour_format"],
       [sunFlowRemainingOutlineSwitch.sw, "sunflow_remaining_outline"],
     ];
     this._sunFlowTextControls = [
@@ -12119,6 +12155,10 @@ varsHead.innerHTML = `
       this._elWindOutlineWidth.value = String(this._config.wind_outline_width ?? 3.2);
       this._elWindArrowSize.value = String(this._config.wind_arrow_size ?? 82);
       this._elWindArrowThickness.value = String(this._config.wind_arrow_thickness ?? 100);
+    }
+    if (this._rowWindArrowDirection && this._swWindArrowInward) {
+      this._rowWindArrowDirection.style.display = isWindDirection ? "" : "none";
+      this._swWindArrowInward.checked = this._config.wind_arrow_inward === true;
     }
     const showWindGaugeDetails = isWindDirection && !!this._config.wind_gauge_enabled;
     if (this._rowWindGaugeTitle) {
