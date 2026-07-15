@@ -80,10 +80,11 @@ Examples:
 #### **Symbol** *(config key: `symbol`)*
 Selects what the card draws.
 
-Symbols in v1.0.0:
+Available symbols:
 - Batteries: `battery_liquid`, `battery_segments`, `battery_splitted_segments`
 - Containers/levels: `water_level_segments`, `tank`, `ibc_tank`, `silo`, `gas_cylinder`
 - Mechanics: `garage_door`, `blind`, `gate`
+- Weather/nature: `wind_direction`, `sun_flow`
 - Other: `fan`, `heatpump`, `image`
 
 ---
@@ -514,6 +515,437 @@ Same as Fan — changes how many blades are drawn.
 
 ---
 
+# Wind Direction
+<a id="wind-direction"></a>
+
+Symbol: `wind_direction`
+
+## What it’s for
+
+Wind Direction draws a compass with an arrow that follows a direction sensor measured in degrees. It can show the degree value, translated compass direction, compass ticks and direction markers. Optional gauges can show current wind speed and maximum/gust speed inside the compass.
+
+The direction follows meteorological convention: the value describes the direction the wind comes from.
+
+- `0°` or `360°` = North
+- `90°` = East
+- `180°` = South
+- `270°` = West
+- `315°` = Northwest
+
+## Required entity
+
+#### **Main Entity** *(config key: `entity`)*
+
+Select an entity whose state contains wind direction in degrees, for example `sensor.wind_direction` or `sensor.weather_station_wind_bearing`.
+
+The card extracts the numeric part of the state, so states such as `315`, `315°`, or `315 deg` can be used. The recommended scale is:
+
+```yaml
+min: 0
+max: 360
+```
+
+## Compass display
+
+#### **Show degree value** *(config key: `wind_show_degrees`)*
+Shows or hides the degree value in the center.
+
+#### **Show direction value** *(config key: `wind_show_direction`)*
+Shows or hides the compass abbreviation below the degree value.
+
+#### **Show direction markers** *(config key: `wind_show_direction_markers`)*
+Shows or hides the eight direction labels around the compass.
+
+#### **Show compass scale** *(config key: `show_scale`)*
+Shows or hides the tick marks inside the compass ring.
+
+#### **Direction labels language** *(config key: `wind_direction_language`)*
+
+Controls the language used for direction abbreviations. `auto` follows the Home Assistant language. Supported values are `auto`, `sv`, `en`, `da`, `no`, `fi`, `de`, `nl`, `fr`, `es`, `it`, `pt`, and `pt-br`.
+
+#### **Degree font size (px) - 0 = auto** *(config key: `wind_degree_font_size`)*
+Controls the center degree text size. Use `0` for automatic sizing.
+
+#### **Direction font size (px) - 0 = auto** *(config key: `wind_direction_font_size`)*
+Controls the center direction abbreviation size. Use `0` for automatic sizing.
+
+#### **Direction marker font size (px)** *(config key: `wind_direction_marker_font_size`)*
+Controls the direction labels outside the ring. Valid range: `8–24`.
+
+#### **Compass outline width (0-16)** *(config key: `wind_outline_width`)*
+Controls the compass ring width. Use `0` to hide the ring.
+
+#### **Wind arrow size (%)** *(config key: `wind_arrow_size`)*
+Controls arrow length. The arrow tip stays near the scale/ring and the arrow grows inward. Valid range: `25–100`.
+
+#### **Wind arrow thickness (%)** *(config key: `wind_arrow_thickness`)*
+Controls arrow shaft and arrowhead thickness. Valid range: `40–200`.
+
+#### **Outline value** *(config key: `outline_value`)*
+The common Outline value setting also applies to the center degree and direction text.
+
+## How main Intervals color the compass
+
+Wind Direction selects a main Interval from the direction value in degrees. The first interval whose **Up to value** is equal to or above the current degree value is used.
+
+- **Fill color** fills the compass face.
+- **Outline color** colors the compass ring.
+- **Scale color** colors compass ticks, direction markers, and the arrow.
+- **Gradient from/to** fills the compass face when gradient is enabled.
+
+Tip: Use one interval ending at `360` for the same colors in every direction. `transparent`, `rgba(...)`, and HEX values are supported for Fill.
+
+## Optional wind gauges
+
+#### **Show wind gauges** *(config key: `wind_gauge_enabled`)*
+Enables optional current and maximum wind-speed gauges.
+
+#### **Current wind speed entity** *(config key: `wind_gauge_speed_entity`)*
+Entity used for current wind speed.
+
+#### **Maximum wind speed entity** *(config key: `wind_gauge_max_entity`)*
+Entity used for maximum or gust wind speed.
+
+#### **Gauge display** *(config key: `wind_gauge_mode`)*
+
+- `dual` — two gauge arcs
+- `single_max_marker` — one current-speed arc and a thin maximum marker
+
+#### **Gauge position** *(config key: `wind_gauge_position`)*
+Places the gauge at `bottom`, `top`, `left`, or `right`.
+
+#### **Show gauge values** *(config key: `wind_gauge_show_values`)*
+Shows current and maximum values inside the compass.
+
+#### **Show gauge scale** *(config key: `wind_gauge_show_scale`)*
+Shows minimum, midpoint, and maximum gauge labels.
+
+#### **Current wind label** *(config key: `wind_gauge_speed_label`)*
+Label before current wind speed. Default: `Wind`.
+
+#### **Maximum wind label** *(config key: `wind_gauge_max_label`)*
+Label before maximum/gust speed. Default: `Max`.
+
+#### **Gauge minimum** *(config key: `wind_gauge_min`)*
+Minimum gauge value. Default: `0`.
+
+#### **Gauge maximum** *(config key: `wind_gauge_max`)*
+Maximum gauge value. Default: `30`.
+
+#### **Gauge decimals (0-3)** *(config key: `wind_gauge_decimals`)*
+Number of decimals shown for gauge values.
+
+#### **Gauge arc width (1-12)** *(config key: `wind_gauge_arc_width`)*
+Controls gauge arc thickness.
+
+#### **Gauge value font size (6-14)** *(config key: `wind_gauge_font_size`)*
+Controls gauge value text size.
+
+#### **Gauge opacity (0-100%)** *(config key: `wind_gauge_opacity`)*
+Controls active gauge arcs and gauge value opacity.
+
+#### **Gauge track opacity (0-100%)** *(config key: `wind_gauge_track_opacity`)*
+Controls unfilled gauge track opacity.
+
+#### **Gauge value color** *(config key: `wind_gauge_value_color`)*
+Controls gauge value and gauge scale text color.
+
+#### **Outline gauge values** *(config key: `wind_gauge_value_outline`)*
+Adds or removes a thin outline around gauge values and gauge scale labels.
+
+#### **Gauge value outline color** *(config key: `wind_gauge_value_outline_color`)*
+Controls the gauge text outline color.
+
+## Wind gauge Intervals
+
+Wind gauge Intervals are separate from main card Intervals:
+
+- Main card Intervals color the compass based on direction degrees.
+- Wind gauge Intervals color gauge arcs based on wind-speed values.
+- Current and maximum speed each select their own active gauge interval.
+- Fill and optional Gradient from/to control active gauge arc colors.
+
+## Wind Direction YAML example
+
+```yaml
+type: custom:andy-sensor-card
+name: Wind direction
+entity: sensor.wind_direction
+symbol: wind_direction
+min: 0
+max: 360
+value_position: hide
+show_scale: true
+wind_show_degrees: true
+wind_show_direction: true
+wind_show_direction_markers: true
+wind_direction_language: auto
+wind_outline_width: 3.2
+wind_arrow_size: 82
+wind_arrow_thickness: 100
+wind_gauge_enabled: true
+wind_gauge_speed_entity: sensor.wind_speed
+wind_gauge_max_entity: sensor.wind_gust
+wind_gauge_mode: single_max_marker
+wind_gauge_position: bottom
+wind_gauge_show_values: true
+wind_gauge_show_scale: true
+wind_gauge_min: 0
+wind_gauge_max: 30
+wind_gauge_value_color: "#ffffff"
+wind_gauge_value_outline: true
+wind_gauge_value_outline_color: "#000000"
+intervals:
+  - to: 360
+    color: transparent
+    outline: "#94a3b8"
+    scale_color: "#60a5fa"
+wind_gauge_intervals:
+  - to: 5
+    color: "#22c55e"
+  - to: 12
+    color: "#f59e0b"
+  - to: 30
+    color: "#ef4444"
+```
+
+---
+
+# SunFlow
+<a id="sunflow"></a>
+
+Symbol: `sun_flow`
+
+## What it’s for
+
+SunFlow visualizes the daylight period from sunrise to sunset. It can show sunrise and sunset, daylight duration, the sun’s current position, remaining time, current time, solar elevation, and solar azimuth.
+
+The sun and horizon glow become strongest when the sun is highest. **Glow strength** controls the maximum intensity.
+
+## Recommended Home Assistant entity
+
+#### **Main Entity** *(config key: `entity`)*
+
+For the standard Home Assistant setup, use:
+
+```yaml
+entity: sun.sun
+```
+
+SunFlow reads `next_rising`, `next_setting`, `elevation`, `azimuth`, and `rising` from the entity when available. Every value can also be overridden with separate entities from a personal weather station or another integration.
+
+## Optional data-source overrides
+
+#### **Sun entity override (optional)** *(config key: `sunflow_sun_entity`)*
+Uses another Sun-style entity instead of Main Entity for SunFlow data.
+
+#### **Sunrise time entity (optional)** *(config key: `sunflow_sunrise_entity`)*
+
+Overrides sunrise. Supported state formats include an ISO date/time, a local time such as `04:43`, or a Unix timestamp in seconds or milliseconds.
+
+#### **Sunset time entity (optional)** *(config key: `sunflow_sunset_entity`)*
+Overrides sunset using the same formats as the sunrise override.
+
+#### **Solar elevation entity (optional)** *(config key: `sunflow_elevation_entity`)*
+
+Overrides current solar elevation in degrees. This value selects the active main Interval used to color SunFlow.
+
+#### **Solar azimuth entity (optional)** *(config key: `sunflow_azimuth_entity`)*
+Overrides current solar azimuth in degrees.
+
+#### **Sun rising entity (optional)** *(config key: `sunflow_rising_entity`)*
+
+Overrides whether the sun is rising or setting. Common accepted states include `true/false`, `on/off`, `rising/setting`, and `up/down`.
+
+## Display toggles
+
+#### **Show sunrise** *(config key: `sunflow_show_sunrise`)*
+Shows sunrise time and label.
+
+#### **Show sunset** *(config key: `sunflow_show_sunset`)*
+Shows sunset time and label.
+
+#### **Show daylight duration** *(config key: `sunflow_show_daylight`)*
+Shows total time between sunrise and sunset.
+
+#### **Show current time** *(config key: `sunflow_show_now`)*
+Shows current time in the bottom information row.
+
+#### **Show solar elevation** *(config key: `sunflow_show_elevation`)*
+Shows solar elevation in the bottom information row.
+
+#### **Show solar azimuth** *(config key: `sunflow_show_azimuth`)*
+Shows solar azimuth in the bottom information row.
+
+#### **Show remaining time** *(config key: `sunflow_show_remaining`)*
+
+Shows time remaining near the sun marker:
+
+- During daylight: time until sunset.
+- At night: time until sunrise.
+
+#### **Show arc scale** *(config key: `sunflow_show_scale`)*
+Shows or hides tick marks above the sun arc.
+
+## How SunFlow uses main Intervals
+
+SunFlow matches main Intervals against the **current solar elevation in degrees**.
+
+The value is taken from:
+
+1. **Solar elevation entity (optional)** when configured.
+2. Otherwise, the `elevation` attribute from the selected Sun entity.
+3. With the standard setup, this is normally `sun.sun`.
+
+The first interval whose **Up to value** is equal to or above the current elevation is selected. Solar elevation can be negative below the horizon.
+
+- **Fill color** controls the sun and elapsed arc when gradient is disabled.
+- **Gradient from/to** controls the sun and elapsed arc only when gradient is enabled.
+- **Outline color** controls the horizon and future/dashed arc.
+- **Scale color** controls arc ticks and unavailable-data text.
+
+You do not need to enable gradient to set the SunFlow color. With gradient disabled, use **Fill color**.
+
+Example elevation intervals:
+
+```yaml
+intervals:
+  - to: -1
+    color: "#64748b"
+    outline: "#475569"
+    scale_color: "#94a3b8"
+  - to: 10
+    color: "#fb7185"
+    outline: "#94a3b8"
+    scale_color: "#fda4af"
+  - to: 35
+    color: "#f59e0b"
+    outline: "#94a3b8"
+    scale_color: "#fbbf24"
+  - to: 90
+    color: "#facc15"
+    outline: "#94a3b8"
+    scale_color: "#fde047"
+```
+
+## SunFlow text and labels
+
+All labels can be translated or replaced.
+
+#### **Sunrise label** *(config key: `sunflow_sunrise_label`)*
+Default: `Sunrise`.
+
+#### **Sunset label** *(config key: `sunflow_sunset_label`)*
+Default: `Sunset`.
+
+#### **Daylight label** *(config key: `sunflow_daylight_label`)*
+Default: `Daylight`.
+
+#### **Current time label** *(config key: `sunflow_now_label`)*
+Default: `Now`.
+
+#### **Elevation label** *(config key: `sunflow_elevation_label`)*
+Default: `Elevation`.
+
+#### **Azimuth label** *(config key: `sunflow_azimuth_label`)*
+Default: `Azimuth`.
+
+#### **Daytime remaining label** *(config key: `sunflow_remaining_label`)*
+Default: `remaining`.
+
+#### **Night countdown label** *(config key: `sunflow_until_sunrise_label`)*
+Default: `until sunrise`.
+
+#### **Hours label** *(config key: `sunflow_hours_label`)*
+Default: `h`.
+
+#### **Minutes label** *(config key: `sunflow_minutes_label`)*
+Default: `min`.
+
+#### **Unavailable label** *(config key: `sunflow_unavailable_label`)*
+Default: `Sun data unavailable`.
+
+## SunFlow appearance
+
+#### **Glow strength (0-100%)** *(config key: `sunflow_glow_strength`)*
+Controls maximum sun and horizon glow. Actual glow follows sun position and is strongest near the top of the arc.
+
+#### **Sun size (7-26)** *(config key: `sunflow_sun_size`)*
+Controls the moving sun marker size.
+
+#### **Arc width (0.5-10)** *(config key: `sunflow_arc_width`)*
+Controls sun path width.
+
+#### **Text size (60-160%)** *(config key: `sunflow_font_scale`)*
+Scales all text inside SunFlow.
+
+#### **Primary value color** *(config key: `sunflow_value_color`)*
+Controls Daylight duration and its label.
+
+#### **Sunrise text color** *(config key: `sunflow_sunrise_color`)*
+Controls sunrise time and label.
+
+#### **Sunset text color** *(config key: `sunflow_sunset_color`)*
+Controls sunset time and label.
+
+#### **Remaining text color** *(config key: `sunflow_remaining_color`)*
+Controls remaining-time text, line, and dot.
+
+#### **Outline remaining time** *(config key: `sunflow_remaining_outline`)*
+Adds or removes a thin outline around remaining-time text.
+
+#### **Remaining outline color** *(config key: `sunflow_remaining_outline_color`)*
+Controls remaining-time outline color.
+
+#### **Bottom info color** *(config key: `sunflow_secondary_color`)*
+Controls the bottom row containing current time, elevation, and azimuth.
+
+## SunFlow YAML example using `sun.sun`
+
+```yaml
+type: custom:andy-sensor-card
+name: SunFlow
+entity: sun.sun
+symbol: sun_flow
+value_position: hide
+sunflow_show_sunrise: true
+sunflow_show_sunset: true
+sunflow_show_daylight: true
+sunflow_show_now: true
+sunflow_show_elevation: true
+sunflow_show_azimuth: true
+sunflow_show_remaining: true
+sunflow_show_scale: true
+sunflow_glow_strength: 85
+sunflow_sun_size: 14
+sunflow_arc_width: 2.5
+sunflow_font_scale: 100
+sunflow_value_color: "#ffffff"
+sunflow_sunrise_color: "#ffffff"
+sunflow_sunset_color: "#ffffff"
+sunflow_remaining_color: "#fbbf24"
+sunflow_remaining_outline: true
+sunflow_remaining_outline_color: "#000000"
+sunflow_secondary_color: "#ffffff"
+```
+
+## SunFlow YAML example using separate weather-station entities
+
+```yaml
+type: custom:andy-sensor-card
+name: SunFlow
+entity: sensor.weather_station_solar_elevation
+symbol: sun_flow
+value_position: hide
+sunflow_sunrise_entity: sensor.weather_station_sunrise
+sunflow_sunset_entity: sensor.weather_station_sunset
+sunflow_elevation_entity: sensor.weather_station_solar_elevation
+sunflow_azimuth_entity: sensor.weather_station_solar_azimuth
+sunflow_rising_entity: binary_sensor.sun_rising
+```
+
+---
+
 # Image
 <a id="image"></a>
 
@@ -771,3 +1203,4 @@ Configured at the card level:
 ```yaml
 intervals:
   - ...
+```
