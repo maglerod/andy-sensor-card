@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.8.4
+ * Andy Sensor Card v1.0.8.5
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -17,7 +17,7 @@
 */
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.8.4";
+const CARD_VERSION = "1.0.8.5";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
 
 //console.info(CARD_TAGLINE);
@@ -354,6 +354,22 @@ function normalizeWindGaugePosition(value) {
 function normalizeWindGaugeMode(value) {
   const mode = String(value || "dual").trim().toLowerCase();
   return mode === "single_max_marker" ? "single_max_marker" : "dual";
+}
+
+function isKilometersPerHourUnit(unit) {
+  const normalized = String(unit || "").trim().toLowerCase().replace(/\s+/g, "");
+  return ["km/h", "kmh", "kph", "kmph", "km·h⁻¹", "km·h-1", "kmh⁻¹", "kmh-1"].includes(normalized);
+}
+
+function normalizeWindSpeedMeasurement(value, unit, convertKmhToMs) {
+  const numeric = toNumberMaybe(value);
+  const sourceUnit = String(unit || "").trim();
+  const converted = Number.isFinite(numeric) && convertKmhToMs === true && isKilometersPerHourUnit(sourceUnit);
+  return {
+    value: Number.isFinite(numeric) ? (converted ? numeric / 3.6 : numeric) : Number.NaN,
+    unit: converted ? "m/s" : sourceUnit,
+    converted,
+  };
 }
 
 function parseSunFlowBoolean(value) {
@@ -1108,6 +1124,7 @@ this._gateAnimRaf = 0;
       wind_gauge_enabled: false,
       wind_gauge_show_values: true,
       wind_gauge_show_scale: false,
+      wind_gauge_convert_kmh_to_ms: false,
       wind_gauge_speed_entity: "",
       wind_gauge_max_entity: "",
       wind_gauge_position: "bottom",
@@ -1317,6 +1334,7 @@ const rawSym = String(this._config.symbol || "battery_liquid");
     this._config.wind_gauge_enabled = (typeof this._config.wind_gauge_enabled === "boolean") ? this._config.wind_gauge_enabled : false;
     this._config.wind_gauge_show_values = (typeof this._config.wind_gauge_show_values === "boolean") ? this._config.wind_gauge_show_values : true;
     this._config.wind_gauge_show_scale = (typeof this._config.wind_gauge_show_scale === "boolean") ? this._config.wind_gauge_show_scale : false;
+    this._config.wind_gauge_convert_kmh_to_ms = this._config.wind_gauge_convert_kmh_to_ms === true;
     this._config.wind_gauge_speed_entity = String(this._config.wind_gauge_speed_entity || "").trim();
     this._config.wind_gauge_max_entity = String(this._config.wind_gauge_max_entity || "").trim();
     this._config.wind_gauge_position = normalizeWindGaugePosition(this._config.wind_gauge_position);
@@ -4967,6 +4985,7 @@ const root = this.renderRoot;
     const gaugeEnabled = this._config?.wind_gauge_enabled === true;
     const gaugeShowValues = this._config?.wind_gauge_show_values !== false;
     const gaugeShowScale = this._config?.wind_gauge_show_scale === true;
+    const gaugeConvertKmhToMs = this._config?.wind_gauge_convert_kmh_to_ms === true;
     const gaugeSpeedEntity = String(this._config?.wind_gauge_speed_entity || "").trim();
     const gaugeMaxEntity = String(this._config?.wind_gauge_max_entity || "").trim();
     const gaugePosition = normalizeWindGaugePosition(this._config?.wind_gauge_position);
@@ -4990,8 +5009,18 @@ const root = this.renderRoot;
     const gaugeValueOutlineColor = normalizeHex(this._config?.wind_gauge_value_outline_color, "#000000");
     const gaugeSpeedValueRaw = gaugeEnabled && gaugeSpeedEntity ? this._getStateValue(gaugeSpeedEntity) : null;
     const gaugeMaxValueRaw = gaugeEnabled && gaugeMaxEntity ? this._getStateValue(gaugeMaxEntity) : null;
-    const gaugeSpeedValue = (gaugeSpeedValueRaw == null) ? Number.NaN : Number(gaugeSpeedValueRaw);
-    const gaugeMaxValue = (gaugeMaxValueRaw == null) ? Number.NaN : Number(gaugeMaxValueRaw);
+    const gaugeSpeedMeasurement = normalizeWindSpeedMeasurement(
+      gaugeSpeedValueRaw,
+      this._getUnitForEntity(gaugeSpeedEntity),
+      gaugeConvertKmhToMs
+    );
+    const gaugeMaxMeasurement = normalizeWindSpeedMeasurement(
+      gaugeMaxValueRaw,
+      this._getUnitForEntity(gaugeMaxEntity),
+      gaugeConvertKmhToMs
+    );
+    const gaugeSpeedValue = gaugeSpeedMeasurement.value;
+    const gaugeMaxValue = gaugeMaxMeasurement.value;
     const gaugeSpeedValid = gaugeEnabled && Number.isFinite(gaugeSpeedValue);
     const gaugeMaxValid = gaugeEnabled && Number.isFinite(gaugeMaxValue);
     const gaugeHasValues = gaugeSpeedValid || gaugeMaxValid;
@@ -5152,9 +5181,8 @@ const root = this.renderRoot;
       right: { x: cx + 42, y1: cy - 4, y2: cy + 8, anchor: "middle", fontScale: 0.85 },
     }[gaugePosition];
     const gaugeTextFontSize = gaugeFontSize * gaugeTextLayout.fontScale;
-    const gaugeValueText = (label, gaugeValue, entityId) => {
+    const gaugeValueText = (label, gaugeValue, unit) => {
       const shown = fmtNumLocale(gaugeValue, gaugeDecimals, this.hass?.locale?.language) ?? String(gaugeValue);
-      const unit = this._getUnitForEntity(entityId);
       const prefix = label ? `${label.toUpperCase()} ` : "";
       return `${prefix}${shown}${unit ? ` ${unit}` : ""}`;
     };
@@ -5163,10 +5191,10 @@ const root = this.renderRoot;
     const gaugeSpeedTextY = gaugeBothValid ? gaugeTextLayout.y1 : gaugeSingleTextY;
     const gaugeMaxTextY = gaugeBothValid ? gaugeTextLayout.y2 : gaugeSingleTextY;
     const gaugeSpeedText = gaugeSpeedValid
-      ? gaugeValueText(gaugeSpeedLabel, gaugeSpeedValue, gaugeSpeedEntity)
+      ? gaugeValueText(gaugeSpeedLabel, gaugeSpeedValue, gaugeSpeedMeasurement.unit)
       : "";
     const gaugeMaxText = gaugeMaxValid
-      ? gaugeValueText(gaugeMaxLabel, gaugeMaxValue, gaugeMaxEntity)
+      ? gaugeValueText(gaugeMaxLabel, gaugeMaxValue, gaugeMaxMeasurement.unit)
       : "";
 
     // Keep the arrow tip anchored near the scale/ring. Arrow size only moves
@@ -10313,6 +10341,7 @@ const DEFAULTS = {
   wind_gauge_enabled: false,
   wind_gauge_show_values: true,
   wind_gauge_show_scale: false,
+  wind_gauge_convert_kmh_to_ms: false,
   wind_gauge_speed_entity: "",
   wind_gauge_max_entity: "",
   wind_gauge_position: "bottom",
@@ -10420,6 +10449,7 @@ class AndySensorCardEditor extends HTMLElement {
     incomingRaw.wind_gauge_enabled = !!incomingRaw.wind_gauge_enabled;
     incomingRaw.wind_gauge_show_values = (incomingRaw.wind_gauge_show_values == null) ? true : !!incomingRaw.wind_gauge_show_values;
     incomingRaw.wind_gauge_show_scale = !!incomingRaw.wind_gauge_show_scale;
+    incomingRaw.wind_gauge_convert_kmh_to_ms = incomingRaw.wind_gauge_convert_kmh_to_ms === true;
     incomingRaw.wind_gauge_speed_entity = String(incomingRaw.wind_gauge_speed_entity || "").trim();
     incomingRaw.wind_gauge_max_entity = String(incomingRaw.wind_gauge_max_entity || "").trim();
     incomingRaw.wind_gauge_position = normalizeWindGaugePosition(incomingRaw.wind_gauge_position);
@@ -11397,6 +11427,14 @@ const row2 = document.createElement("div");
     rowWindGaugeToggles.appendChild(swWindGaugeValuesWrap);
     rowWindGaugeToggles.appendChild(swWindGaugeScaleWrap);
     root.appendChild(rowWindGaugeToggles);
+
+    const rowWindGaugeUnitConversion = document.createElement("div");
+    rowWindGaugeUnitConversion.className = "grid1";
+    const windGaugeUnitConversionSwitch = mkSwitch("Convert km/h gauge values to m/s", "wind_gauge_convert_kmh_to_ms");
+    this._rowWindGaugeUnitConversion = rowWindGaugeUnitConversion;
+    this._swWindGaugeUnitConversion = windGaugeUnitConversionSwitch.sw;
+    rowWindGaugeUnitConversion.appendChild(windGaugeUnitConversionSwitch.wrap);
+    root.appendChild(rowWindGaugeUnitConversion);
 
     const rowWindGaugeEntities = document.createElement("div");
     rowWindGaugeEntities.className = "grid2";
@@ -12734,6 +12772,10 @@ varsHead.innerHTML = `
       this._elWindGaugeMaxEntity.hass = this._hass;
       this._elWindGaugeSpeedEntity.value = String(this._config.wind_gauge_speed_entity || "");
       this._elWindGaugeMaxEntity.value = String(this._config.wind_gauge_max_entity || "");
+    }
+    if (this._rowWindGaugeUnitConversion && this._swWindGaugeUnitConversion) {
+      this._rowWindGaugeUnitConversion.style.display = showWindGaugeDetails ? "" : "none";
+      this._swWindGaugeUnitConversion.checked = this._config.wind_gauge_convert_kmh_to_ms === true;
     }
     if (this._rowWindGaugeLayout && this._elWindGaugePosition && this._elWindGaugeArcWidth && this._elWindGaugeFontSize) {
       this._rowWindGaugeLayout.style.display = showWindGaugeDetails ? "" : "none";
