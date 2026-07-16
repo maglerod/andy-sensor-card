@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.8.3
+ * Andy Sensor Card v1.0.8.4
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -17,7 +17,7 @@
 */
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.8.3";
+const CARD_VERSION = "1.0.8.4";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
 
 //console.info(CARD_TAGLINE);
@@ -239,6 +239,87 @@ function normalizeDegreesForDisplay(value) {
   const normalized = normalizeDegrees(n);
   if (Math.abs(normalized) < 1e-9 && Math.abs(n) > 0) return 360;
   return normalized;
+}
+
+function normalizeWindAverageMinutes(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const parsed = toNumberMaybe(raw);
+  if (!Number.isFinite(parsed)) return "";
+  return clampInt(parsed, 1, 10, 1);
+}
+
+function normalizeCircularMeanResult(value) {
+  const normalized = normalizeDegrees(value);
+  return Math.abs(normalized) < 1e-9 || Math.abs(normalized - 360) < 1e-9 ? 0 : normalized;
+}
+
+function circularMeanDegrees(values, fallback = null) {
+  let sinSum = 0;
+  let cosSum = 0;
+  let count = 0;
+  for (const value of values || []) {
+    const numeric = toNumberMaybe(value);
+    if (!Number.isFinite(numeric)) continue;
+    const radians = (normalizeDegrees(numeric) * Math.PI) / 180;
+    sinSum += Math.sin(radians);
+    cosSum += Math.cos(radians);
+    count += 1;
+  }
+  if (!count || Math.hypot(sinSum, cosSum) <= count * 1e-9) {
+    return Number.isFinite(toNumberMaybe(fallback)) ? normalizeCircularMeanResult(fallback) : null;
+  }
+  return normalizeCircularMeanResult((Math.atan2(sinSum, cosSum) * 180) / Math.PI);
+}
+
+function timeWeightedCircularMeanDegrees(events, startMs, endMs, fallback = null) {
+  const start = Number(startMs);
+  const end = Number(endMs);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return circularMeanDegrees((events || []).map((event) => event?.value), fallback);
+  }
+
+  const sorted = (events || [])
+    .map((event) => ({ time: Number(event?.time), value: toNumberMaybe(event?.value) }))
+    .filter((event) => Number.isFinite(event.time) && Number.isFinite(event.value))
+    .sort((a, b) => a.time - b.time);
+  if (!sorted.length) return Number.isFinite(toNumberMaybe(fallback)) ? normalizeCircularMeanResult(fallback) : null;
+
+  const compact = [];
+  for (const event of sorted) {
+    if (compact.length && compact[compact.length - 1].time === event.time) compact[compact.length - 1] = event;
+    else compact.push(event);
+  }
+
+  // HA normally includes the state active at the period start. Clamping the
+  // first sample also keeps the result useful with alternative history sources.
+  compact[0].time = Math.min(Math.max(compact[0].time, start), end);
+  let sinSum = 0;
+  let cosSum = 0;
+  let totalWeight = 0;
+  for (let index = 0; index < compact.length; index += 1) {
+    const segmentStart = index === 0 ? start : Math.max(start, compact[index].time);
+    const nextTime = index + 1 < compact.length ? compact[index + 1].time : end;
+    const segmentEnd = Math.min(end, Math.max(segmentStart, nextTime));
+    const weight = segmentEnd - segmentStart;
+    if (weight <= 0) continue;
+    const radians = (normalizeDegrees(compact[index].value) * Math.PI) / 180;
+    sinSum += Math.sin(radians) * weight;
+    cosSum += Math.cos(radians) * weight;
+    totalWeight += weight;
+  }
+
+  if (totalWeight <= 0 || Math.hypot(sinSum, cosSum) <= totalWeight * 1e-9) {
+    return circularMeanDegrees(compact.map((event) => event.value), fallback);
+  }
+  return normalizeCircularMeanResult((Math.atan2(sinSum, cosSum) * 180) / Math.PI);
+}
+
+function historyTimestampMs(item) {
+  const raw = item?.last_changed ?? item?.last_updated ?? item?.lc ?? item?.lu;
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw < 1e12 ? raw * 1000 : raw;
+  const parsed = Date.parse(String(raw ?? ""));
+  return Number.isFinite(parsed) ? parsed : null;
 }
 const WIND_DIRECTION_LABELS = Object.freeze({
   en: Object.freeze(["N", "NE", "E", "SE", "S", "SW", "W", "NW"]),
@@ -797,6 +878,9 @@ class AndySensorCard extends LitElement {
       _stats: { state: true },
       _lastStatsAt: { state: false },
       _statsBusy: { state: false },
+      _windDirectionAverage: { state: true },
+      _windAverageLastAt: { state: false },
+      _windAverageBusy: { state: false },
     };
   }
 
@@ -845,6 +929,11 @@ this._gateAnimRaf = 0;
     this._ascPrevScrollEl = null;
     this._ascPrevScrollOnScroll = null;
     this._sunFlowClockTimer = 0;
+    this._windAverageTimer = 0;
+    this._windDirectionAverage = null;
+    this._windAverageLastAt = 0;
+    this._windAverageBusy = false;
+    this._windAverageRequestKey = "";
   }
 
   _estimateMinCardHeightPx() {
@@ -934,6 +1023,7 @@ this._gateAnimRaf = 0;
       else this.removeAttribute("data-asc-preview");
     } catch (_) {}
     this._syncSunFlowClock();
+    this._syncWindDirectionAverageTimer();
   }
 
 
@@ -1001,6 +1091,7 @@ this._gateAnimRaf = 0;
       wind_show_degrees: true,
       wind_show_direction: true,
       wind_show_direction_markers: true,
+      wind_average_minutes: "",
       wind_direction_language: "auto",
       wind_degree_font_size: 0,
       wind_direction_font_size: 0,
@@ -1216,6 +1307,7 @@ const rawSym = String(this._config.symbol || "battery_liquid");
     this._config.wind_show_degrees = (typeof this._config.wind_show_degrees === "boolean") ? this._config.wind_show_degrees : true;
     this._config.wind_show_direction = (typeof this._config.wind_show_direction === "boolean") ? this._config.wind_show_direction : true;
     this._config.wind_show_direction_markers = (typeof this._config.wind_show_direction_markers === "boolean") ? this._config.wind_show_direction_markers : true;
+    this._config.wind_average_minutes = normalizeWindAverageMinutes(this._config.wind_average_minutes);
     this._config.wind_arrow_inward = this._config.wind_arrow_inward === true;
     this._config.wind_sun_entity = String(this._config.wind_sun_entity || "").trim();
     this._config.wind_sun_azimuth_entity = String(this._config.wind_sun_azimuth_entity || "").trim();
@@ -1600,6 +1692,119 @@ _applyInsideValueY() {
     }
   }
 
+  _windAverageConfigKey() {
+    const symbol = String(this._config?.symbol || "").trim().toLowerCase();
+    const minutes = normalizeWindAverageMinutes(this._config?.wind_average_minutes);
+    const entityId = String(this._config?.entity || "").trim();
+    return symbol === "wind_direction" && minutes !== "" && entityId
+      ? `${entityId}|${minutes}`
+      : "";
+  }
+
+  _getWindDirectionDisplayValue(currentValue) {
+    const key = this._windAverageConfigKey();
+    const average = this._windDirectionAverage;
+    if (!key || !average || average.key !== key || !Number.isFinite(average.value)) return currentValue;
+    return average.value;
+  }
+
+  _syncWindDirectionAverageTimer() {
+    const active = !!this._windAverageConfigKey();
+    if (active && !this._windAverageTimer) {
+      this._windAverageTimer = setInterval(() => {
+        try { this._maybeUpdateWindDirectionAverage(); } catch (_) {}
+      }, 30000);
+    } else if (!active && this._windAverageTimer) {
+      clearInterval(this._windAverageTimer);
+      this._windAverageTimer = 0;
+    }
+  }
+
+  async _maybeUpdateWindDirectionAverage(force = false) {
+    const key = this._windAverageConfigKey();
+    if (!key) {
+      if (this._windDirectionAverage) this._windDirectionAverage = null;
+      this._windAverageLastAt = 0;
+      return;
+    }
+    if (!this.hass?.callApi || this._windAverageBusy) return;
+
+    const now = Date.now();
+    const throttleMs = 25 * 1000;
+    if (!force && this._windAverageLastAt && (now - this._windAverageLastAt) < throttleMs
+      && this._windDirectionAverage?.key === key) return;
+
+    const [entityId, minuteText] = key.split("|");
+    const minutes = normalizeWindAverageMinutes(minuteText);
+    if (!entityId || minutes === "") return;
+
+    const endMs = now;
+    const startMs = endMs - (minutes * 60 * 1000);
+    const currentState = this.hass.states?.[entityId];
+    const currentValue = toNumberMaybe(currentState?.state);
+    this._windAverageBusy = true;
+    this._windAverageRequestKey = key;
+
+    try {
+      const startIso = new Date(startMs).toISOString();
+      const endIso = new Date(endMs).toISOString();
+      const path = `history/period/${encodeURIComponent(startIso)}?end_time=${encodeURIComponent(endIso)}&filter_entity_id=${encodeURIComponent(entityId)}&minimal_response&no_attributes`;
+      const data = await this.hass.callApi("GET", path);
+      const series = Array.isArray(data) && Array.isArray(data[0]) ? data[0] : [];
+      const events = [];
+      const equalWeightValues = [];
+
+      for (const item of series) {
+        const value = toNumberMaybe(item?.state ?? item?.s);
+        if (!Number.isFinite(value)) continue;
+        equalWeightValues.push(value);
+        const time = historyTimestampMs(item);
+        if (Number.isFinite(time)) events.push({ time, value });
+      }
+
+      if (Number.isFinite(currentValue)) {
+        equalWeightValues.push(currentValue);
+        let currentTime = historyTimestampMs(currentState);
+        if (!Number.isFinite(currentTime)) currentTime = endMs;
+        events.push({ time: clamp(currentTime, startMs, endMs), value: currentValue });
+      }
+
+      let averageValue = timeWeightedCircularMeanDegrees(events, startMs, endMs, currentValue);
+      if (!Number.isFinite(averageValue)) averageValue = circularMeanDegrees(equalWeightValues, currentValue);
+      if (!Number.isFinite(averageValue)) averageValue = currentValue;
+
+      if (this._windAverageConfigKey() !== key) return;
+      this._windDirectionAverage = {
+        key,
+        entityId,
+        minutes,
+        value: Number.isFinite(averageValue) ? normalizeDegrees(averageValue) : null,
+        samples: equalWeightValues.length,
+        fetchedAt: now,
+      };
+      this._windAverageLastAt = now;
+    } catch (error) {
+      if (this._windAverageConfigKey() !== key) return;
+      console.warn(`${CARD_TAGLINE}: wind direction history fetch failed`, error);
+      this._windDirectionAverage = {
+        key,
+        entityId,
+        minutes,
+        value: Number.isFinite(currentValue) ? normalizeDegrees(currentValue) : null,
+        samples: 0,
+        fetchedAt: now,
+        error: true,
+      };
+      this._windAverageLastAt = now;
+    } finally {
+      this._windAverageBusy = false;
+      this._windAverageRequestKey = "";
+      if (this._windAverageConfigKey() && this._windAverageConfigKey() !== key) {
+        Promise.resolve().then(() => this._maybeUpdateWindDirectionAverage(true));
+      }
+    }
+  }
+
   async _maybeUpdateStats() {
     if (!this.hass || !this._config?.show_stats) return;
 
@@ -1722,9 +1927,13 @@ _applyInsideValueY() {
     } catch (_) {}
   }
 updated(changedProps) {
-  if (changedProps.has("_config")) this._syncSunFlowClock();
+  if (changedProps.has("_config")) {
+    this._syncSunFlowClock();
+    this._syncWindDirectionAverageTimer();
+  }
   if (changedProps.has("hass") || changedProps.has("_config")) {
     this._maybeUpdateStats();
+    this._maybeUpdateWindDirectionAverage();
   }
   if (changedProps.has("hass") || changedProps.has("_config") || changedProps.has("_stats")) {
     this._drawScaleDom();
@@ -1776,6 +1985,10 @@ updated(changedProps) {
     if (this._sunFlowClockTimer) {
       clearInterval(this._sunFlowClockTimer);
       this._sunFlowClockTimer = 0;
+    }
+    if (this._windAverageTimer) {
+      clearInterval(this._windAverageTimer);
+      this._windAverageTimer = 0;
     }
     try {
       if (this._ascPrevScrollEl && this._ascPrevScrollOnScroll) {
@@ -3759,6 +3972,9 @@ _drawScaleDom() {
       : this._config.entity;
     let value1 = this._getStateValue(primaryEntityId);
     const rawState1 = this._getRawState(primaryEntityId);
+    if (baseSym === "wind_direction" && value1 !== null) {
+      value1 = this._getWindDirectionDisplayValue(value1);
+    }
 
     // For Gate / Garage door / Blind: allow non-numeric states like "opening"/"closing"
     // to be treated as valid (so the card doesn't show "Entity not available").
@@ -3859,7 +4075,8 @@ _drawScaleDom() {
     const valueClass = `value${outlined ? " outlined" : ""}`;
     const splitValueClass = `split-value${outlined ? " outlined" : ""}`;
 
-    const interval = normalizeInterval(this._findIntervalForStateOrValue((typeof value1 === "number") ? value1 : null, (rawState1 != null) ? String(rawState1).trim() : null, this._config.intervals));
+    const intervalRawState = isWindDirection ? String(value1) : ((rawState1 != null) ? String(rawState1).trim() : null);
+    const interval = normalizeInterval(this._findIntervalForStateOrValue((typeof value1 === "number") ? value1 : null, intervalRawState, this._config.intervals));
     // Optional: interval "New value" template can override the displayed value text on the main card
     const intervalNewValueTpl = (interval && interval.new_value != null && String(interval.new_value).trim() !== "")
       ? String(interval.new_value)
@@ -10079,6 +10296,7 @@ const DEFAULTS = {
   wind_show_degrees: true,
   wind_show_direction: true,
   wind_show_direction_markers: true,
+  wind_average_minutes: "",
   wind_direction_language: "auto",
   wind_degree_font_size: 0,
   wind_direction_font_size: 0,
@@ -10292,6 +10510,7 @@ incomingRaw.symbol =
     incomingRaw.image_url = String(incomingRaw.image_url || "").trim();
 
     {
+      incomingRaw.wind_average_minutes = normalizeWindAverageMinutes(incomingRaw.wind_average_minutes);
       const degreeFs = Number(incomingRaw.wind_degree_font_size ?? 0);
       incomingRaw.wind_degree_font_size = (Number.isFinite(degreeFs) && degreeFs >= 0) ? degreeFs : 0;
       const directionFs = Number(incomingRaw.wind_direction_font_size ?? 0);
@@ -11074,6 +11293,16 @@ const row2 = document.createElement("div");
     this._rowWindLanguage = rowWindLanguage;
     rowWindLanguage.appendChild(this._elWindDirectionLanguage);
     root.appendChild(rowWindLanguage);
+
+    const rowWindAverage = document.createElement("div");
+    rowWindAverage.className = "grid1";
+    this._elWindAverageMinutes = mkText("Average direction over minutes (1-10, empty = current)", "wind_average_minutes", "number", "");
+    this._elWindAverageMinutes.min = "1";
+    this._elWindAverageMinutes.max = "10";
+    this._elWindAverageMinutes.step = "1";
+    this._rowWindAverage = rowWindAverage;
+    rowWindAverage.appendChild(this._elWindAverageMinutes);
+    root.appendChild(rowWindAverage);
 
     const rowWindFonts = document.createElement("div");
     rowWindFonts.className = "grid3";
@@ -12450,6 +12679,10 @@ varsHead.innerHTML = `
     if (this._rowWindLanguage && this._elWindDirectionLanguage) {
       this._rowWindLanguage.style.display = isWindDirection ? "" : "none";
       this._setSelectControlValue?.(this._elWindDirectionLanguage, this._config.wind_direction_language || "auto");
+    }
+    if (this._rowWindAverage && this._elWindAverageMinutes) {
+      this._rowWindAverage.style.display = isWindDirection ? "" : "none";
+      this._elWindAverageMinutes.value = String(this._config.wind_average_minutes ?? "");
     }
     if (this._rowWindFonts && this._elWindDegreeFont && this._elWindDirectionFont && this._elWindMarkerFont) {
       this._rowWindFonts.style.display = isWindDirection ? "" : "none";
@@ -15783,6 +16016,13 @@ _centerBadgePreviewNow(badgeOrObj) {
 }
 
     let value = this._eventValue(ev, target);
+    if (key === "wind_average_minutes") {
+      const raw = String(value ?? "").trim();
+      if (!raw) return this._commit(key, "");
+      const numeric = toNumberMaybe(raw);
+      if (!Number.isFinite(numeric)) return;
+      return this._commit(key, clampInt(numeric, 1, 10, 1));
+    }
 //v1.0.2
     if (key === "min" || key === "max" || key === "value_font_size" || key === "name_font_size" || key === "stats_hours" || key === "card_scale" || key === "symbol_margin_top" || key === "symbol_margin_bottom" || key === "segment_gap" || key === "name_offset_x" || key === "name_offset_y" || key === "value_offset_x" || key === "value_offset_y" || key === "tap_confirm_open_window" || key === "fan_blade_count" || key === "wind_degree_font_size" || key === "wind_direction_font_size" || key === "wind_direction_marker_font_size" || key === "wind_outline_width" || key === "wind_arrow_size" || key === "wind_arrow_thickness" || key === "wind_sun_size" || key === "wind_gauge_min" || key === "wind_gauge_max" || key === "wind_gauge_decimals" || key === "wind_gauge_opacity" || key === "wind_gauge_track_opacity" || key === "wind_gauge_arc_width" || key === "wind_gauge_font_size" || key === "sunflow_glow_strength" || key === "sunflow_sun_size" || key === "sunflow_arc_width" || key === "sunflow_font_scale") {
       const raw = String(value ?? "").trim();
