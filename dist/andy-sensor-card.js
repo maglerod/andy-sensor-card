@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.8.2
+ * Andy Sensor Card v1.0.8.3
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -17,7 +17,7 @@
 */
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.8.2";
+const CARD_VERSION = "1.0.8.3";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
 
 //console.info(CARD_TAGLINE);
@@ -156,6 +156,45 @@ function clamp(v, min, max) {
   if (!Number.isFinite(n)) return Number.isFinite(lo) ? lo : 0;
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) return n;
   return Math.max(Math.min(n, Math.max(lo, hi)), Math.min(lo, hi));
+}
+
+function serviceEntityDomain(entityId) {
+  const value = String(entityId || "").trim();
+  const separator = value.indexOf(".");
+  return separator > 0 ? value.slice(0, separator) : "";
+}
+
+function domainServiceItems(hass, entityId) {
+  const domain = serviceEntityDomain(entityId);
+  const services = hass?.services?.[domain];
+  if (!domain || !services) return [];
+  return Object.keys(services).sort().map((service) => ({
+    value: `${domain}.${service}`,
+    label: `${domain}.${service}`,
+  }));
+}
+
+async function availableServiceItemsForEntity(hass, entityId) {
+  const targetEntity = String(entityId || "").trim();
+  const fallback = domainServiceItems(hass, targetEntity);
+  if (!targetEntity || !hass?.callWS) return fallback;
+
+  try {
+    const result = await hass.callWS({
+      type: "get_services_for_target",
+      target: { entity_id: [targetEntity] },
+      expand_group: true,
+    });
+    if (!Array.isArray(result)) return fallback;
+
+    return [...new Set(result
+      .map((service) => String(service || "").trim())
+      .filter((service) => /^[a-z0-9_]+\.[a-z0-9_]+$/i.test(service)))]
+      .sort()
+      .map((service) => ({ value: service, label: service }));
+  } catch (_) {
+    return fallback;
+  }
 }
 
 
@@ -522,6 +561,14 @@ out.slider_track_color = (out.slider_track_color == null) ? "" : String(out.slid
   const act = String(out.tap_action.action || "more-info");
   out.tap_action.action = (act === "toggle" || act === "call-service" || act === "none") ? act : "more-info";
   out.tap_action.service = String(out.tap_action.service || "").trim();
+  out.tap_action.target_entity = String(out.tap_action.target_entity || "").trim();
+  const legacyServiceParts = out.tap_action.service.split(/\s+/).filter(Boolean);
+  if (legacyServiceParts.length === 2
+    && /^[a-z0-9_]+\.[a-z0-9_]+$/i.test(legacyServiceParts[0])
+    && /^[a-z0-9_]+\.[a-z0-9_]+$/i.test(legacyServiceParts[1])) {
+    out.tap_action.service = legacyServiceParts[0];
+    if (!out.tap_action.target_entity) out.tap_action.target_entity = legacyServiceParts[1];
+  }
   out.tap_action.service_data = out.tap_action.service_data || null;
 
   return out;
@@ -815,6 +862,9 @@ this._gateAnimRaf = 0;
     if (vp.startsWith("bottom")) px += 18 * scale;
     if (splitHorizontal) px += 14 * scale;
     if (this._config?.show_stats) px += 10 * scale;
+    const symbolMarginTop = clamp(Number(this._config?.symbol_margin_top) || 0, -200, 200);
+    const symbolMarginBottom = clamp(Number(this._config?.symbol_margin_bottom) || 0, -200, 200);
+    px += symbolMarginTop + symbolMarginBottom;
 
     const explicitHeight = String(this._config?.card_height || "").trim().match(/^(\d+(?:\.\d+)?)px$/i);
     if (explicitHeight) {
@@ -822,11 +872,11 @@ this._gateAnimRaf = 0;
       if (Number.isFinite(explicitPx) && explicitPx > 0) px = Math.max(px, explicitPx);
     }
 
-    return Math.max(210, Math.ceil(px));
+    return Math.max(80, Math.ceil(px));
   }
 
   _estimateCardRows() {
-    return Math.max(4, Math.ceil(this._estimateMinCardHeightPx() / 56));
+    return Math.max(2, Math.ceil(this._estimateMinCardHeightPx() / 56));
   }
 
   getCardSize() {
@@ -914,6 +964,8 @@ this._gateAnimRaf = 0;
       decimals: 0,
       //v1.0.2
       card_scale: 1,
+      symbol_margin_top: 0,
+      symbol_margin_bottom: 0,
       card_width: "",
       card_height: "",
       //v1.0.2
@@ -929,6 +981,7 @@ this._gateAnimRaf = 0;
       // Main tap action + overlay positions
       tap_action: "more-info",
       tap_action_service: "",
+      tap_action_target_entity: "",
       tap_action_service_data: "",
       tap_action_service_picker: true,
       // For Gate/Garage door/Blind: start animation immediately when you tap (useful when the sensor updates state only when fully closed)
@@ -956,6 +1009,11 @@ this._gateAnimRaf = 0;
       wind_arrow_size: 82,
       wind_arrow_thickness: 100,
       wind_arrow_inward: false,
+      wind_sun_entity: "",
+      wind_sun_azimuth_entity: "",
+      wind_sun_size: 7,
+      wind_sun_color: "#ffae00",
+      wind_sun_use_interval_color: false,
       wind_gauge_enabled: false,
       wind_gauge_show_values: true,
       wind_gauge_show_scale: false,
@@ -1159,6 +1217,10 @@ const rawSym = String(this._config.symbol || "battery_liquid");
     this._config.wind_show_direction = (typeof this._config.wind_show_direction === "boolean") ? this._config.wind_show_direction : true;
     this._config.wind_show_direction_markers = (typeof this._config.wind_show_direction_markers === "boolean") ? this._config.wind_show_direction_markers : true;
     this._config.wind_arrow_inward = this._config.wind_arrow_inward === true;
+    this._config.wind_sun_entity = String(this._config.wind_sun_entity || "").trim();
+    this._config.wind_sun_azimuth_entity = String(this._config.wind_sun_azimuth_entity || "").trim();
+    this._config.wind_sun_color = normalizeHex(this._config.wind_sun_color, "#ffae00");
+    this._config.wind_sun_use_interval_color = this._config.wind_sun_use_interval_color === true;
     this._config.wind_direction_language = normalizeWindDirectionLanguage(this._config.wind_direction_language);
     this._config.wind_gauge_enabled = (typeof this._config.wind_gauge_enabled === "boolean") ? this._config.wind_gauge_enabled : false;
     this._config.wind_gauge_show_values = (typeof this._config.wind_gauge_show_values === "boolean") ? this._config.wind_gauge_show_values : true;
@@ -1228,6 +1290,8 @@ const rawSym = String(this._config.symbol || "battery_liquid");
       this._config.wind_arrow_size = Number.isFinite(arrowSize) ? clamp(arrowSize, 25, 100) : 82;
       const arrowThickness = Number(this._config.wind_arrow_thickness ?? 100);
       this._config.wind_arrow_thickness = Number.isFinite(arrowThickness) ? clamp(arrowThickness, 40, 200) : 100;
+      const windSunSize = Number(this._config.wind_sun_size ?? 7);
+      this._config.wind_sun_size = Number.isFinite(windSunSize) ? clamp(windSunSize, 4, 20) : 7;
       const gaugeMin = Number(this._config.wind_gauge_min ?? 0);
       this._config.wind_gauge_min = Number.isFinite(gaugeMin) ? gaugeMin : 0;
       const gaugeMax = Number(this._config.wind_gauge_max ?? 30);
@@ -1336,6 +1400,10 @@ const rawSym = String(this._config.symbol || "battery_liquid");
     let cs = toNumberMaybe(this._config.card_scale);
     if (!Number.isFinite(cs) || cs <= 0) cs = 1;
     this._config.card_scale = Math.max(0.2, Math.min(4.0, cs));
+    const symbolMarginTop = toNumberMaybe(this._config.symbol_margin_top);
+    const symbolMarginBottom = toNumberMaybe(this._config.symbol_margin_bottom);
+    this._config.symbol_margin_top = Number.isFinite(symbolMarginTop) ? clamp(symbolMarginTop, -200, 200) : 0;
+    this._config.symbol_margin_bottom = Number.isFinite(symbolMarginBottom) ? clamp(symbolMarginBottom, -200, 200) : 0;
     // v1.0.2 card_scale clamp
 
     if (!Array.isArray(this._config.intervals) || this._config.intervals.length === 0) {
@@ -1354,6 +1422,15 @@ const rawSym = String(this._config.symbol || "battery_liquid");
     // Normalize tap_action + overlay positions
     const ta = String(this._config.tap_action || 'more-info');
     this._config.tap_action = (ta === 'toggle' || ta === 'none' || ta === 'more-info' || ta === 'call-service') ? ta : 'more-info';
+    this._config.tap_action_service = String(this._config.tap_action_service || '').trim();
+    this._config.tap_action_target_entity = String(this._config.tap_action_target_entity || '').trim();
+    const legacyTapServiceParts = this._config.tap_action_service.split(/\s+/).filter(Boolean);
+    if (legacyTapServiceParts.length === 2
+      && /^[a-z0-9_]+\.[a-z0-9_]+$/i.test(legacyTapServiceParts[0])
+      && /^[a-z0-9_]+\.[a-z0-9_]+$/i.test(legacyTapServiceParts[1])) {
+      this._config.tap_action_service = legacyTapServiceParts[0];
+      if (!this._config.tap_action_target_entity) this._config.tap_action_target_entity = legacyTapServiceParts[1];
+    }
     this._config.tap_starts_animation = (this._config.tap_starts_animation == null) ? true : !!this._config.tap_starts_animation;
 
     // Tap confirm safety (Gate/Garage/Blind)
@@ -2560,6 +2637,32 @@ _applyEntityTemplate(entityId, template, opts = {}) {
   return out;
 }
 
+_callServiceWithTarget(domain, service, serviceData = {}, targetEntityId = "", fallbackEntityId = "") {
+  if (!this.hass?.callService || !domain || !service) return;
+
+  const data = (serviceData && typeof serviceData === "object" && !Array.isArray(serviceData))
+    ? { ...serviceData }
+    : {};
+  const target = {};
+
+  // HA service targets are separate from service data. Lift legacy target keys so
+  // existing configurations continue to work with current Home Assistant versions.
+  for (const key of ["entity_id", "device_id", "area_id", "floor_id", "label_id"]) {
+    if (data[key] != null && data[key] !== "") target[key] = data[key];
+    delete data[key];
+  }
+
+  const entityTarget = String(targetEntityId || "").trim();
+  if (entityTarget) target.entity_id = entityTarget;
+  else if (Object.keys(target).length === 0) {
+    const fallbackTarget = String(fallbackEntityId || "").trim();
+    if (fallbackTarget) target.entity_id = fallbackTarget;
+  }
+
+  const hasTarget = Object.keys(target).length > 0;
+  return this.hass.callService(domain, service, data, hasTarget ? target : undefined);
+}
+
 _onBadgeTap(ev, badge) {
   try { ev?.stopPropagation?.(); } catch (e) {}
   try { ev?.preventDefault?.(); } catch (e) {}
@@ -2580,7 +2683,7 @@ _onBadgeTap(ev, badge) {
   }
   if (act === "toggle") {
     if (!entityId) return;
-    this.hass?.callService?.("homeassistant", "toggle", { entity_id: entityId });
+    this._callServiceWithTarget("homeassistant", "toggle", {}, entityId);
     return;
   }
 
@@ -2597,9 +2700,9 @@ _onBadgeTap(ev, badge) {
       try { data = JSON.parse(sd); } catch (e) { data = {}; }
     }
 
-    if (entityId && (data.entity_id == null) && domain !== "script") data.entity_id = entityId;
-
-    this.hass?.callService?.(domain, service, data);
+    const configuredTarget = String(b.tap_action?.target_entity || "").trim();
+    const defaultTarget = (domain === "script") ? "" : entityId;
+    this._callServiceWithTarget(domain, service, data, configuredTarget, defaultTarget);
     return;
   }
 }
@@ -2810,32 +2913,32 @@ _badgeSliderSend(badge, rawVal) {
   if (domain === "light") {
     const pct = clamp(Math.round(v), 0, 100);
     if (pct <= 0) {
-      this.hass.callService("light", "turn_off", { entity_id: entityId });
+      this._callServiceWithTarget("light", "turn_off", {}, entityId);
     } else {
-      this.hass.callService("light", "turn_on", { entity_id: entityId, brightness_pct: pct });
+      this._callServiceWithTarget("light", "turn_on", { brightness_pct: pct }, entityId);
     }
     return;
   }
 
   if (domain === "cover") {
     const pos = clamp(Math.round(v), 0, 100);
-    this.hass.callService("cover", "set_cover_position", { entity_id: entityId, position: pos });
+    this._callServiceWithTarget("cover", "set_cover_position", { position: pos }, entityId);
     return;
   }
 
   if (domain === "number") {
-    this.hass.callService("number", "set_value", { entity_id: entityId, value: v });
+    this._callServiceWithTarget("number", "set_value", { value: v }, entityId);
     return;
   }
 
   if (domain === "input_number") {
-    this.hass.callService("input_number", "set_value", { entity_id: entityId, value: v });
+    this._callServiceWithTarget("input_number", "set_value", { value: v }, entityId);
     return;
   }
 
   // Fallback: try homeassistant.turn_on with a "value" (may not work for all domains)
   try {
-    this.hass.callService("homeassistant", "turn_on", { entity_id: entityId, value: v });
+    this._callServiceWithTarget("homeassistant", "turn_on", { value: v }, entityId);
   } catch (e) {}
 }
 
@@ -2928,13 +3031,19 @@ _onBadgeSliderChange(ev, badge) {
 
     try {
       if (act === "toggle") {
-        this.hass?.callService?.("homeassistant", "toggle", { entity_id: entityId });
+        this._callServiceWithTarget("homeassistant", "toggle", {}, entityId);
       } else if (act === "call-service") {
         const svc = String(p.svc || "").trim();
         if (svc && svc.indexOf(".") > 0) {
           const [domain, service] = svc.split(".", 2);
           const data = (p.data && typeof p.data === "object") ? p.data : {};
-          this.hass?.callService?.(domain, service, data);
+          this._callServiceWithTarget(
+            domain,
+            service,
+            data,
+            p.targetEntityId || "",
+            p.fallbackTargetEntityId || ""
+          );
         }
       } else if (act === "more-info") {
         this._openMoreInfoEntity?.(entityId);
@@ -3008,7 +3117,17 @@ _onBadgeSliderChange(ev, badge) {
             else if (typeof sd === "string" && sd.trim()) {
               try { data = JSON.parse(sd); } catch (e) { data = {}; }
             }
-            this._armTapConfirmOpen({ entityId, act: "call-service", svc, data });
+            const [serviceDomain] = svc.split(".", 1);
+            const configuredTarget = String(this._config?.tap_action_target_entity || "").trim();
+            const defaultTarget = (serviceDomain === "script") ? "" : entityId;
+            this._armTapConfirmOpen({
+              entityId,
+              act: "call-service",
+              svc,
+              data,
+              targetEntityId: configuredTarget,
+              fallbackTargetEntityId: defaultTarget,
+            });
           }
           return;
         } else {
@@ -3028,7 +3147,7 @@ _onBadgeSliderChange(ev, badge) {
     } catch (_) {}
 
     if (act === 'toggle') {
-      this.hass.callService('homeassistant', 'toggle', { entity_id: entityId });
+      this._callServiceWithTarget('homeassistant', 'toggle', {}, entityId);
       return;
     }
 
@@ -3043,9 +3162,9 @@ _onBadgeSliderChange(ev, badge) {
       else if (typeof sd === "string" && sd.trim()) {
         try { data = JSON.parse(sd); } catch (e) { data = {}; }
       }
-      if (entityId && (data.entity_id == null) && domain !== "script") data.entity_id = entityId;
-
-      this.hass?.callService?.(domain, service, data);
+      const configuredTarget = String(this._config?.tap_action_target_entity || "").trim();
+      const defaultTarget = (domain === "script") ? "" : entityId;
+      this._callServiceWithTarget(domain, service, data, configuredTarget, defaultTarget);
       return;
     }
 
@@ -3763,7 +3882,9 @@ _drawScaleDom() {
     const noy = toNumberMaybe(this._config.name_offset_y) ?? 0;
     const vox = toNumberMaybe(this._config.value_offset_x) ?? 0;
     const voy = toNumberMaybe(this._config.value_offset_y) ?? 0;
-    const scaleVarStyle = `--asc-scale:${cardScale};--asc-edge-pad:${edgePadPx}px;--asc-gap-mult:${gapMult};${nameVar}--asc-name-off-x:${nox}px;--asc-name-off-y:${noy}px;--asc-value-off-x:${vox}px;--asc-value-off-y:${voy}px;`;
+    const symbolMarginTopPx = clamp(Number(this._config.symbol_margin_top) || 0, -200, 200);
+    const symbolMarginBottomPx = clamp(Number(this._config.symbol_margin_bottom) || 0, -200, 200);
+    const scaleVarStyle = `--asc-scale:${cardScale};--asc-edge-pad:${edgePadPx}px;--asc-gap-mult:${gapMult};${nameVar}--asc-name-off-x:${nox}px;--asc-name-off-y:${noy}px;--asc-value-off-x:${vox}px;--asc-value-off-y:${voy}px;--asc-symbol-margin-top:${symbolMarginTopPx}px;--asc-symbol-margin-bottom:${symbolMarginBottomPx}px;`;
     const statsPos = String(this._config.stats_position || "bottom_center");
     const tallSyms = new Set(["battery_liquid","battery_segments","battery_splitted_segments","gas_cylinder","silo"]);
     const statsPadPx = (showStats && statsPos.startsWith("bottom") && tallSyms.has(baseSym)) ? 0 : 10;
@@ -4690,6 +4811,50 @@ const root = this.renderRoot;
     const tickMinorInner = tickOuterR - 4;
     const cx = 110;
     const cy = 120;
+    const windSunEntityId = String(this._config?.wind_sun_entity || "").trim();
+    const windSunAzimuthEntityId = String(this._config?.wind_sun_azimuth_entity || "").trim();
+    const windSunConfigured = !!(windSunEntityId || windSunAzimuthEntityId);
+    const windSunState = windSunEntityId ? this.hass?.states?.[windSunEntityId] : null;
+    const windSunAttributes = windSunState?.attributes || {};
+    const windSunAzimuthRaw = windSunAzimuthEntityId
+      ? this._getStateValue(windSunAzimuthEntityId)
+      : (toNumberMaybe(windSunAttributes.azimuth) ?? toNumberMaybe(windSunState?.state));
+    const windSunElevation = toNumberMaybe(windSunAttributes.elevation);
+    const windSunStateRaw = String(windSunState?.state || "").trim().toLowerCase();
+    const windSunAboveHorizon = !windSunEntityId
+      || windSunStateRaw === "above_horizon"
+      || (windSunStateRaw !== "below_horizon" && (!Number.isFinite(windSunElevation) || windSunElevation >= 0));
+    const windSunVisible = windSunConfigured && Number.isFinite(windSunAzimuthRaw) && windSunAboveHorizon;
+    const windSunAzimuth = windSunVisible ? normalizeDegrees(windSunAzimuthRaw) : 0;
+    const windSunSize = clamp(Number(this._config?.wind_sun_size ?? 7), 4, 20);
+    const windSunOrbitR = Math.max(24, ringInnerR - windSunSize - 9);
+    const windSunRadians = (windSunAzimuth * Math.PI) / 180;
+    const windSunX = cx + (windSunOrbitR * Math.sin(windSunRadians));
+    const windSunY = cy - (windSunOrbitR * Math.cos(windSunRadians));
+    const windSunHeightFactor = Number.isFinite(windSunElevation)
+      ? clamp01(Math.sin((clamp(windSunElevation, 0, 90) * Math.PI) / 180))
+      : 1;
+    const windSunGlowOpacity = clamp01(windSunHeightFactor * 0.85);
+    const windSunManualColor = normalizeHex(this._config?.wind_sun_color, "#ffae00");
+    const windSunUsesInterval = this._config?.wind_sun_use_interval_color === true;
+    const windSunIntervalColor = /^transparent$/i.test(String(dialFill || ""))
+      ? windSunManualColor
+      : dialFill;
+    const windSunBaseColor = windSunUsesInterval ? windSunIntervalColor : windSunManualColor;
+    const windSunGradientFrom = windSunUsesInterval && useGradient
+      && !/^transparent$/i.test(String(gFrom || "")) ? gFrom : windSunBaseColor;
+    const windSunGradientTo = windSunUsesInterval && useGradient
+      && !/^transparent$/i.test(String(gTo || "")) ? gTo : windSunBaseColor;
+    const windSunRayPath = Array.from({ length: 8 }, (_, index) => {
+      const angle = (index * Math.PI) / 4;
+      const inner = windSunSize + 4;
+      const outer = windSunSize + 9;
+      const x1 = windSunX + (Math.cos(angle) * inner);
+      const y1 = windSunY + (Math.sin(angle) * inner);
+      const x2 = windSunX + (Math.cos(angle) * outer);
+      const y2 = windSunY + (Math.sin(angle) * outer);
+      return `M ${x1.toFixed(2)} ${y1.toFixed(2)} L ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+    }).join(" ");
     const tickPath = (degrees, innerR) => degrees.map((tickDeg) => {
       const rad = (tickDeg * Math.PI) / 180;
       const x1 = cx + tickOuterR * Math.sin(rad);
@@ -4824,6 +4989,9 @@ const root = this.renderRoot;
     const sheenId = `windSheen_${this._instanceId}`;
     const gaugeSpeedGradId = `windGaugeSpeed_${this._instanceId}`;
     const gaugeMaxGradId = `windGaugeMax_${this._instanceId}`;
+    const windSunGradientId = `windSun_${this._instanceId}`;
+    const windSunHighlightId = `windSunHighlight_${this._instanceId}`;
+    const windSunGlowId = `windSunGlow_${this._instanceId}`;
     return html`
       <svg class="sensor-svg wind-direction-svg" viewBox="0 0 220 230" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Wind direction">
         <defs>
@@ -4847,6 +5015,19 @@ const root = this.renderRoot;
             <stop offset="0%" stop-color="${gaugeReverseDirection ? gaugeMaxColors.to : gaugeMaxColors.from}"></stop>
             <stop offset="100%" stop-color="${gaugeReverseDirection ? gaugeMaxColors.from : gaugeMaxColors.to}"></stop>
           </linearGradient>
+          <radialGradient id="${windSunGradientId}" cx="42%" cy="35%" r="70%">
+            <stop offset="0%" stop-color="${windSunGradientTo}"></stop>
+            <stop offset="100%" stop-color="${windSunGradientFrom}"></stop>
+          </radialGradient>
+          <radialGradient id="${windSunHighlightId}" cx="32%" cy="26%" r="72%">
+            <stop offset="0%" stop-color="#ffffff" stop-opacity="0.58"></stop>
+            <stop offset="42%" stop-color="#ffffff" stop-opacity="0.13"></stop>
+            <stop offset="100%" stop-color="#ffffff" stop-opacity="0"></stop>
+          </radialGradient>
+          <filter id="${windSunGlowId}" x="-100%" y="-100%" width="300%" height="300%">
+            <feGaussianBlur stdDeviation="${(2 + (windSunGlowOpacity * 5)).toFixed(2)}" result="blur"></feGaussianBlur>
+            <feMerge><feMergeNode in="blur"></feMergeNode><feMergeNode in="SourceGraphic"></feMergeNode></feMerge>
+          </filter>
         </defs>
 
         <circle
@@ -4960,6 +5141,12 @@ const root = this.renderRoot;
 
         <g transform="rotate(${compassDeg} ${cx} ${cy})" filter="url(#${shadowId})">
           <path d="${arrowPath}" fill="${scaleColor}" fill-opacity="0.98"></path>
+        </g>
+
+        <g class="wind-sun" style="display:${windSunVisible ? "inline" : "none"}" filter="url(#${windSunGlowId})">
+          <path d="${windSunRayPath}" fill="none" stroke="${windSunBaseColor}" stroke-width="2.2" stroke-linecap="round" opacity="${(0.68 + (windSunGlowOpacity * 0.32)).toFixed(3)}"></path>
+          <circle cx="${windSunX.toFixed(2)}" cy="${windSunY.toFixed(2)}" r="${windSunSize}" fill="url(#${windSunGradientId})" stroke="${windSunBaseColor}" stroke-width="2"></circle>
+          <circle cx="${windSunX.toFixed(2)}" cy="${windSunY.toFixed(2)}" r="${windSunSize}" fill="url(#${windSunHighlightId})" stroke="none"></circle>
         </g>
 
       </svg>
@@ -9103,7 +9290,13 @@ _waterLevelSegmentsSvg(opts) {
         100% { stroke-dashoffset: 0; opacity: 0.10; }
       }
 
-      .iconRow { display:flex; justify-content:center; padding-top: calc(6px * var(--asc-scale, 1)); }
+      .iconRow {
+        display:flex;
+        justify-content:center;
+        padding-top: calc(6px * var(--asc-scale, 1));
+        margin-top: var(--asc-symbol-margin-top, 0px);
+        margin-bottom: var(--asc-symbol-margin-bottom, 0px);
+      }
       .iconWrap { position: relative; display:flex; justify-content:center; align-items:center; }
 
       .symbolRotator { position: relative; display:flex; justify-content:center; align-items:center; }
@@ -9846,6 +10039,7 @@ const DEFAULTS = {
   symbol: "battery_liquid",
   tap_action: "more-info",
   tap_action_service: "",
+  tap_action_target_entity: "",
   tap_action_service_data: "",
   tap_action_service_picker: true,
   tap_confirm_open: false,
@@ -9893,6 +10087,11 @@ const DEFAULTS = {
   wind_arrow_size: 82,
   wind_arrow_thickness: 100,
   wind_arrow_inward: false,
+  wind_sun_entity: "",
+  wind_sun_azimuth_entity: "",
+  wind_sun_size: 7,
+  wind_sun_color: "#ffae00",
+  wind_sun_use_interval_color: false,
   wind_gauge_enabled: false,
   wind_gauge_show_values: true,
   wind_gauge_show_scale: false,
@@ -9955,6 +10154,8 @@ const DEFAULTS = {
   stats_hours: 24,
   //v1.0.2
   card_scale: 1,
+      symbol_margin_top: 0,
+      symbol_margin_bottom: 0,
       card_width: "",
       card_height: "",
       //v1.0.2    
@@ -9973,13 +10174,30 @@ class AndySensorCardEditor extends HTMLElement {
 
     incomingRaw.badge_drag_enabled = !!incomingRaw.badge_drag_enabled;
     incomingRaw.tap_action_service_picker = (incomingRaw.tap_action_service_picker == null) ? true : !!incomingRaw.tap_action_service_picker;
+    incomingRaw.tap_action_service = String(incomingRaw.tap_action_service || "").trim();
+    incomingRaw.tap_action_target_entity = String(incomingRaw.tap_action_target_entity || "").trim();
+    const legacyTapServiceParts = incomingRaw.tap_action_service.split(/\s+/).filter(Boolean);
+    if (legacyTapServiceParts.length === 2
+      && /^[a-z0-9_]+\.[a-z0-9_]+$/i.test(legacyTapServiceParts[0])
+      && /^[a-z0-9_]+\.[a-z0-9_]+$/i.test(legacyTapServiceParts[1])) {
+      incomingRaw.tap_action_service = legacyTapServiceParts[0];
+      if (!incomingRaw.tap_action_target_entity) incomingRaw.tap_action_target_entity = legacyTapServiceParts[1];
+    }
     incomingRaw.tap_confirm_open = !!incomingRaw.tap_confirm_open;
     incomingRaw.tap_confirm_open_anywhere = !!incomingRaw.tap_confirm_open_anywhere;
     incomingRaw.fan_show_frame = !!incomingRaw.fan_show_frame;
+    const symbolMarginTop = toNumberMaybe(incomingRaw.symbol_margin_top);
+    const symbolMarginBottom = toNumberMaybe(incomingRaw.symbol_margin_bottom);
+    incomingRaw.symbol_margin_top = Number.isFinite(symbolMarginTop) ? clamp(symbolMarginTop, -200, 200) : 0;
+    incomingRaw.symbol_margin_bottom = Number.isFinite(symbolMarginBottom) ? clamp(symbolMarginBottom, -200, 200) : 0;
     incomingRaw.wind_show_degrees = (incomingRaw.wind_show_degrees == null) ? true : !!incomingRaw.wind_show_degrees;
     incomingRaw.wind_show_direction = (incomingRaw.wind_show_direction == null) ? true : !!incomingRaw.wind_show_direction;
     incomingRaw.wind_show_direction_markers = (incomingRaw.wind_show_direction_markers == null) ? true : !!incomingRaw.wind_show_direction_markers;
     incomingRaw.wind_arrow_inward = incomingRaw.wind_arrow_inward === true;
+    incomingRaw.wind_sun_entity = String(incomingRaw.wind_sun_entity || "").trim();
+    incomingRaw.wind_sun_azimuth_entity = String(incomingRaw.wind_sun_azimuth_entity || "").trim();
+    incomingRaw.wind_sun_color = normalizeHex(incomingRaw.wind_sun_color, "#ffae00");
+    incomingRaw.wind_sun_use_interval_color = incomingRaw.wind_sun_use_interval_color === true;
     incomingRaw.wind_direction_language = normalizeWindDirectionLanguage(incomingRaw.wind_direction_language);
     incomingRaw.wind_gauge_enabled = !!incomingRaw.wind_gauge_enabled;
     incomingRaw.wind_gauge_show_values = (incomingRaw.wind_gauge_show_values == null) ? true : !!incomingRaw.wind_gauge_show_values;
@@ -10086,6 +10304,8 @@ incomingRaw.symbol =
       incomingRaw.wind_arrow_size = Number.isFinite(arrowSize) ? clamp(arrowSize, 25, 100) : 82;
       const arrowThickness = Number(incomingRaw.wind_arrow_thickness ?? 100);
       incomingRaw.wind_arrow_thickness = Number.isFinite(arrowThickness) ? clamp(arrowThickness, 40, 200) : 100;
+      const windSunSize = Number(incomingRaw.wind_sun_size ?? 7);
+      incomingRaw.wind_sun_size = Number.isFinite(windSunSize) ? clamp(windSunSize, 4, 20) : 7;
       const gaugeMin = Number(incomingRaw.wind_gauge_min ?? 0);
       incomingRaw.wind_gauge_min = Number.isFinite(gaugeMin) ? gaugeMin : 0;
       const gaugeMax = Number(incomingRaw.wind_gauge_max ?? 30);
@@ -10527,21 +10747,12 @@ const stopBubble = (e) => {
     root.appendChild(this._elMainTap);
 
     // Main tap: call-service UI (same behavior as Badges)
-    const _svcDomainMain = (eid) => {
-      const s = String(eid || "");
-      const i = s.indexOf(".");
-      return i > 0 ? s.slice(0, i) : "";
-    };
-    const _buildSvcItemsMain = (eid) => {
-      const hassSvcs = (this._hass && this._hass.services) ? this._hass.services : null;
-      const dom = _svcDomainMain(eid);
-      const out = [];
-      if (!hassSvcs) return out;
-      if (dom && hassSvcs[dom]) {
-        Object.keys(hassSvcs[dom]).sort().forEach((svc) => out.push({ value: `${dom}.${svc}`, label: `${dom}.${svc}` }));
-      }
-      return out;
-    };
+    const effectiveMainServiceEntity = () => String(
+      this._config?.tap_action_target_entity || this._config?.entity || ""
+    ).trim();
+    const mainServiceCache = new Map();
+    let mainServiceRegistry = this._hass?.services;
+    let mainServiceRequest = 0;
     this._rowMainSvc = document.createElement("div");
     this._rowMainSvc.className = "svcBox";
     this._rowMainSvc.style.display = "none";
@@ -10574,8 +10785,38 @@ const stopBubble = (e) => {
     });
 
     const fillSvcPickerMain = () => {
-      const items = _buildSvcItemsMain(this._config?.entity);
-      setSelectControlOptions(svcPickerMain, items, this._config?.tap_action_service || "");
+      const entityId = effectiveMainServiceEntity();
+      const currentService = String(this._config?.tap_action_service || "");
+
+      if (mainServiceRegistry !== this._hass?.services) {
+        mainServiceRegistry = this._hass?.services;
+        mainServiceCache.clear();
+      }
+
+      const applyItems = (items) => {
+        const selected = items.some((item) => item.value === currentService) ? currentService : "";
+        setSelectControlOptions(svcPickerMain, items, selected);
+      };
+
+      if (!entityId) {
+        mainServiceRequest += 1;
+        applyItems([]);
+        return;
+      }
+
+      if (mainServiceCache.has(entityId)) {
+        applyItems(mainServiceCache.get(entityId));
+        return;
+      }
+
+      // Show a domain-only list immediately, then replace it with HA's exact list.
+      applyItems(domainServiceItems(this._hass, entityId));
+      const request = ++mainServiceRequest;
+      availableServiceItemsForEntity(this._hass, entityId).then((items) => {
+        mainServiceCache.set(entityId, items);
+        if (request !== mainServiceRequest || entityId !== effectiveMainServiceEntity()) return;
+        applyItems(items);
+      });
     };
     fillSvcPickerMain();
     svcRowMain.appendChild(svcPickerMain);
@@ -10592,6 +10833,9 @@ const stopBubble = (e) => {
     tfSvcMain.addEventListener("click", stopBubble);
     this._rowMainSvc.appendChild(tfSvcMain);
 
+    this._elMainServiceTarget = mkEntityControl("Target entity (optional - defaults to Main Entity)", "tap_action_target_entity");
+    this._rowMainSvc.appendChild(this._elMainServiceTarget);
+
     const tfDataMain = createEditorInput();
     tfDataMain.label = "Service data (optional JSON)";
     tfDataMain.value = (typeof this._config?.tap_action_service_data === "string")
@@ -10604,6 +10848,11 @@ const stopBubble = (e) => {
     tfDataMain.addEventListener("click", stopBubble);
     this._rowMainSvc.appendChild(tfDataMain);
 
+    const svcHelpMain = document.createElement("div");
+    svcHelpMain.className = "svcHelp";
+    svcHelpMain.textContent = "Available services follows Target entity, or Main Entity when Target is empty. Service data is optional. Choose Target entity only when the action should control a different entity.";
+    this._rowMainSvc.appendChild(svcHelpMain);
+
     root.appendChild(this._rowMainSvc);
 
     this._updateMainSvcVisibility = () => {
@@ -10615,6 +10864,7 @@ const stopBubble = (e) => {
       const pickerOn = (this._config?.tap_action_service_picker ?? true);
       tfSvcMain.style.display = pickerOn ? "none" : "";
       svcPickerMain.style.display = pickerOn ? "" : "none";
+      if (isSvc && pickerOn) fillSvcPickerMain();
     };
 
 
@@ -10866,6 +11116,38 @@ const row2 = document.createElement("div");
     this._swWindArrowInward = windArrowInwardSwitch.sw;
     rowWindArrowDirection.appendChild(windArrowInwardSwitch.wrap);
     root.appendChild(rowWindArrowDirection);
+
+    const rowWindSunEntities = document.createElement("div");
+    rowWindSunEntities.className = "grid2";
+    this._elWindSunEntity = mkEntityControl("Sun entity / sun position entity (optional)", "wind_sun_entity");
+    this._elWindSunAzimuthEntity = mkEntityControl("Sun azimuth entity override (optional)", "wind_sun_azimuth_entity");
+    this._rowWindSunEntities = rowWindSunEntities;
+    rowWindSunEntities.appendChild(this._elWindSunEntity);
+    rowWindSunEntities.appendChild(this._elWindSunAzimuthEntity);
+    root.appendChild(rowWindSunEntities);
+
+    const rowWindSunStyle = document.createElement("div");
+    rowWindSunStyle.className = "grid3";
+    this._elWindSunSize = mkText("Sun size (4-20)", "wind_sun_size", "number", "7");
+    this._elWindSunSize.min = "4";
+    this._elWindSunSize.max = "20";
+    this._elWindSunSize.step = "0.5";
+    const windSunIntervalColorSwitch = mkSwitch("Use interval color for sun", "wind_sun_use_interval_color");
+    this._swWindSunIntervalColor = windSunIntervalColorSwitch.sw;
+    this._elWindSunColorRow = mkColorText("Manual sun color", "wind_sun_color", "#ffae00");
+    this._elWindSunColor = this._elWindSunColorRow.children[0];
+    this._elWindSunColorPicker = this._elWindSunColorRow.children[1];
+    this._rowWindSunStyle = rowWindSunStyle;
+    rowWindSunStyle.appendChild(this._elWindSunSize);
+    rowWindSunStyle.appendChild(windSunIntervalColorSwitch.wrap);
+    rowWindSunStyle.appendChild(this._elWindSunColorRow);
+    root.appendChild(rowWindSunStyle);
+
+    const windSunNote = document.createElement("div");
+    windSunNote.className = "hint";
+    windSunNote.innerText = "The Sun entity can provide azimuth as an attribute (for example sun.sun) or directly as its state. The optional azimuth entity overrides that position. Interval color uses the active interval's Fill/Gradient.";
+    this._rowWindSunNote = windSunNote;
+    root.appendChild(windSunNote);
 
     const windGaugeTitle = document.createElement("div");
     windGaugeTitle.className = "section-title";
@@ -11255,6 +11537,31 @@ const row2 = document.createElement("div");
     rowSize.appendChild(this._elCardWidth);
     rowSize.appendChild(this._elCardHeight);
     root.appendChild(rowSize);
+
+    const rowSymbolMargins = document.createElement("div");
+    rowSymbolMargins.className = "grid2";
+    this._elSymbolMarginTop = mkText("Symbol top margin offset (px, -200 to 200)", "symbol_margin_top", "text", "0");
+    this._elSymbolMarginTop.inputMode = "numeric";
+    this._elSymbolMarginBottom = mkText("Symbol bottom margin offset (px, -200 to 200)", "symbol_margin_bottom", "text", "0");
+    this._elSymbolMarginBottom.inputMode = "numeric";
+    const replaceDefaultZeroWithMinus = (event) => {
+      if (event.key !== "-") return;
+      const control = event.currentTarget;
+      if (!/^\+?0(?:[.,]0*)?$/.test(String(control?.value ?? "").trim())) return;
+      event.preventDefault();
+      control.value = "-";
+      try { control.requestUpdate?.(); } catch (_) {}
+    };
+    this._elSymbolMarginTop.addEventListener("keydown", replaceDefaultZeroWithMinus);
+    this._elSymbolMarginBottom.addEventListener("keydown", replaceDefaultZeroWithMinus);
+    rowSymbolMargins.appendChild(this._elSymbolMarginTop);
+    rowSymbolMargins.appendChild(this._elSymbolMarginBottom);
+    root.appendChild(rowSymbolMargins);
+
+    const symbolMarginHint = document.createElement("div");
+    symbolMarginHint.className = "hint";
+    symbolMarginHint.innerText = "Margin offsets adjust the card defaults: positive values add space, negative values reduce it.";
+    root.appendChild(symbolMarginHint);
 
     //v1.0.2
 
@@ -12160,6 +12467,24 @@ varsHead.innerHTML = `
       this._rowWindArrowDirection.style.display = isWindDirection ? "" : "none";
       this._swWindArrowInward.checked = this._config.wind_arrow_inward === true;
     }
+    if (this._rowWindSunEntities && this._elWindSunEntity && this._elWindSunAzimuthEntity) {
+      this._rowWindSunEntities.style.display = isWindDirection ? "" : "none";
+      this._elWindSunEntity.hass = this._hass;
+      this._elWindSunEntity.value = this._config.wind_sun_entity || "";
+      this._elWindSunAzimuthEntity.hass = this._hass;
+      this._elWindSunAzimuthEntity.value = this._config.wind_sun_azimuth_entity || "";
+    }
+    if (this._rowWindSunStyle && this._elWindSunSize && this._swWindSunIntervalColor) {
+      this._rowWindSunStyle.style.display = isWindDirection ? "" : "none";
+      this._elWindSunSize.value = String(this._config.wind_sun_size ?? 7);
+      const useIntervalColor = this._config.wind_sun_use_interval_color === true;
+      this._swWindSunIntervalColor.checked = useIntervalColor;
+      if (this._elWindSunColorRow) this._elWindSunColorRow.style.display = useIntervalColor ? "none" : "";
+      const windSunColor = normalizeHex(this._config.wind_sun_color, "#ffae00");
+      if (this._elWindSunColor) this._elWindSunColor.value = windSunColor;
+      if (this._elWindSunColorPicker) this._elWindSunColorPicker.value = toPickerHex(windSunColor, "#ffae00");
+    }
+    if (this._rowWindSunNote) this._rowWindSunNote.style.display = isWindDirection ? "" : "none";
     const showWindGaugeDetails = isWindDirection && !!this._config.wind_gauge_enabled;
     if (this._rowWindGaugeTitle) {
       this._rowWindGaugeTitle.style.display = isWindDirection ? "" : "none";
@@ -12491,6 +12816,10 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
     this._elName.value = this._config.name || "";
 
     if (this._elMainTap) this._elMainTap.value = this._config.tap_action || "more-info";
+    if (this._elMainServiceTarget) {
+      this._elMainServiceTarget.hass = this._hass;
+      this._elMainServiceTarget.value = this._config.tap_action_target_entity || "";
+    }
     if (this._elNamePos) this._elNamePos.value = this._config.name_position || "top_left";
     if (this._elStatsPos) {
       this._elStatsPos.value = this._config.stats_position || "bottom_center";
@@ -12506,6 +12835,8 @@ this._elSymbol.value = this._config.symbol || "battery_liquid";
     if (this._elNameFont) this._elNameFont.value = String(this._config.name_font_size ?? 0);
     //v1.0.2
     this._elCardScale.value = String(this._config.card_scale ?? 1);
+    if (this._elSymbolMarginTop) this._elSymbolMarginTop.value = String(this._config.symbol_margin_top ?? 0);
+    if (this._elSymbolMarginBottom) this._elSymbolMarginBottom.value = String(this._config.symbol_margin_bottom ?? 0);
     if (this._elNameOffsetX) this._elNameOffsetX.value = String(this._config.name_offset_x ?? 0);
     if (this._elNameOffsetY) this._elNameOffsetY.value = String(this._config.name_offset_y ?? 0);
     if (this._elValueOffsetX) this._elValueOffsetX.value = String(this._config.value_offset_x ?? 0);
@@ -13599,7 +13930,7 @@ _makeBadgeMiniPreviewEl(badge) {
       icon_size: 18,
       fixed_width_px: null,
       decimals: null,
-      tap_action: { action: "more-info", service: "", service_data: null },
+      tap_action: { action: "more-info", service: "", target_entity: "", service_data: null },
     });
     this._badgeIntervalDraft = null;
     this._badgeIntervalEditingId = null;
@@ -13731,6 +14062,7 @@ ent.value = this._badgeDraft.entity || "";
 ent.addEventListener("value-changed", (e) => {
   e.stopPropagation();
   this._badgeDraft.entity = e.detail?.value || "";
+  _refreshBadgeServiceEntity();
   // Live preview: show/hide badge instantly when selecting entity
   this._applyBadgeDraftPreview();
 // Auto-suggest a badge title when creating a new badge (only if title is empty).
@@ -14494,38 +14826,13 @@ updateAnimVisibility();
 const svcBox = document.createElement("div");
 svcBox.className = "svcBox";
 
-// Helper: build available services list (prefer services for the badge entity's domain)
-const _svcDomain = (eid) => {
-  const s = String(eid || "");
-  const i = s.indexOf(".");
-  return (i > 0) ? s.slice(0, i) : "";
-};
-const _buildSvcItems = (eid) => {
-  const hassSvcs = (this._hass && this._hass.services) ? this._hass.services : null;
-  const dom = _svcDomain(eid);
-  const out = [];
-  if (!hassSvcs) return out;
-
-  if (dom && hassSvcs[dom]) {
-    Object.keys(hassSvcs[dom]).sort().forEach((svc) => {
-      out.push({ value: `${dom}.${svc}`, label: `${dom}.${svc}` });
-    });
-    // Add a few common fallbacks (if they exist in this HA instance)
-    ["homeassistant.turn_on","homeassistant.turn_off","homeassistant.toggle"].forEach((s) => {
-      const d = s.split(".")[0], n = s.split(".")[1];
-      if (hassSvcs[d] && hassSvcs[d][n]) out.push({ value: s, label: s });
-    });
-    return out;
-  }
-
-  // Fallback: all services (can be long, but better than nothing)
-  Object.keys(hassSvcs).sort().forEach((d) => {
-    Object.keys(hassSvcs[d] || {}).sort().forEach((svc) => {
-      out.push({ value: `${d}.${svc}`, label: `${d}.${svc}` });
-    });
-  });
-  return out;
-};
+// Load only services applicable to the selected badge target.
+const effectiveBadgeServiceEntity = () => String(
+  this._badgeDraft.tap_action?.target_entity || this._badgeDraft.entity || ""
+).trim();
+const badgeServiceCache = new Map();
+let badgeServiceRegistry = this._hass?.services;
+let badgeServiceRequest = 0;
 
 // Picker row (optional) - helps users discover services for the selected entity
 const svcRow = document.createElement("div");
@@ -14558,8 +14865,48 @@ const svcPicker = mkSelectControl({
 });
 
 const _fillSvcPicker = () => {
-  const items = _buildSvcItems(this._badgeDraft.entity);
-  setSelectControlOptions(svcPicker, items, this._badgeDraft.tap_action?.service || "");
+  const entityId = effectiveBadgeServiceEntity();
+  const currentService = String(this._badgeDraft.tap_action?.service || "");
+
+  if (badgeServiceRegistry !== this._hass?.services) {
+    badgeServiceRegistry = this._hass?.services;
+    badgeServiceCache.clear();
+  }
+
+  const applyItems = (items) => {
+    const selected = items.some((item) => item.value === currentService) ? currentService : "";
+    setSelectControlOptions(svcPicker, items, selected);
+  };
+
+  if (!entityId) {
+    badgeServiceRequest += 1;
+    applyItems([]);
+    return;
+  }
+
+  if (badgeServiceCache.has(entityId)) {
+    applyItems(badgeServiceCache.get(entityId));
+    return;
+  }
+
+  applyItems(domainServiceItems(this._hass, entityId));
+  const request = ++badgeServiceRequest;
+  availableServiceItemsForEntity(this._hass, entityId).then((items) => {
+    badgeServiceCache.set(entityId, items);
+    if (request !== badgeServiceRequest || entityId !== effectiveBadgeServiceEntity()) return;
+    applyItems(items);
+  });
+};
+const _refreshBadgeServiceEntity = () => {
+  const selectedService = String(this._badgeDraft.tap_action?.service || "").trim();
+  const selectedDomain = selectedService.includes(".") ? selectedService.split(".", 1)[0] : "";
+  const targetDomain = serviceEntityDomain(effectiveBadgeServiceEntity());
+  if ((this._badgeDraft.tap_action?.service_picker ?? true)
+    && selectedDomain && targetDomain && selectedDomain !== targetDomain) {
+    this._badgeDraft.tap_action.service = "";
+    try { tfSvc.value = ""; } catch (_) {}
+  }
+  _fillSvcPicker();
 };
 _fillSvcPicker();
 svcRow.appendChild(svcPicker);
@@ -14580,6 +14927,21 @@ tfSvc.addEventListener("input", (e) => {
 tfSvc.addEventListener("click", stopBubble);
 svcBox.appendChild(tfSvc);
 
+const badgeServiceTarget = document.createElement("ha-entity-picker");
+badgeServiceTarget.label = "Target entity (optional - defaults to Badge entity)";
+badgeServiceTarget.allowCustomEntity = true;
+badgeServiceTarget.value = this._badgeDraft.tap_action?.target_entity || "";
+if (this._hass) badgeServiceTarget.hass = this._hass;
+badgeServiceTarget.addEventListener("value-changed", (e) => {
+  e.stopPropagation();
+  this._badgeDraft.tap_action = this._badgeDraft.tap_action || {};
+  this._badgeDraft.tap_action.target_entity = e.detail?.value || "";
+  _refreshBadgeServiceEntity();
+  this._applyBadgeDraftPreview();
+});
+badgeServiceTarget.addEventListener("click", stopBubble);
+svcBox.appendChild(badgeServiceTarget);
+
 // Service data
 const tfData = createEditorInput();
 tfData.label = "Service data (optional JSON)";
@@ -14598,7 +14960,7 @@ svcBox.appendChild(tfData);
 // Help text
 const svcHelp = document.createElement("div");
 svcHelp.className = "svcHelp";
-svcHelp.textContent = "Tip: Use the picker to see services available for the badge entity. Service data is JSON, e.g. {\"entity_id\":\"...\",\"volume_level\":0.3}.";
+svcHelp.textContent = "Available services follows Target entity, or Badge entity when Target is empty. Service data is optional. Choose Target entity only when the action should control a different entity.";
 svcBox.appendChild(svcHelp);
 
 const updateSvcPickerVisibility = () => {
@@ -15395,6 +15757,24 @@ _centerBadgePreviewNow(badgeOrObj) {
       return;
     }
 
+    if (key === "entity" || key === "tap_action_target_entity") {
+      const value = String(this._eventValue(ev, target) || "").trim();
+      const nextConfig = { ...(this._config || {}), [key]: value };
+      const serviceEntity = String(
+        nextConfig.tap_action_target_entity || nextConfig.entity || ""
+      ).trim();
+      const serviceDomain = serviceEntityDomain(serviceEntity);
+      const selectedService = String(nextConfig.tap_action_service || "").trim();
+      const selectedDomain = selectedService.includes(".") ? selectedService.split(".", 1)[0] : "";
+
+      this._commit(key, value);
+      if ((nextConfig.tap_action_service_picker ?? true)
+        && selectedDomain && serviceDomain && selectedDomain !== serviceDomain) {
+        this._commit("tap_action_service", "");
+      }
+      return;
+    }
+
     if (typeof target.checked !== "undefined") {
       if (key === "image_frame") {
         // no-op, keep as-is
@@ -15404,11 +15784,17 @@ _centerBadgePreviewNow(badgeOrObj) {
 
     let value = this._eventValue(ev, target);
 //v1.0.2
-    if (key === "min" || key === "max" || key === "value_font_size" || key === "name_font_size" || key === "stats_hours" || key === "card_scale" || key === "segment_gap" || key === "name_offset_x" || key === "name_offset_y" || key === "value_offset_x" || key === "value_offset_y" || key === "tap_confirm_open_window" || key === "fan_blade_count" || key === "wind_degree_font_size" || key === "wind_direction_font_size" || key === "wind_direction_marker_font_size" || key === "wind_outline_width" || key === "wind_arrow_size" || key === "wind_arrow_thickness" || key === "wind_gauge_min" || key === "wind_gauge_max" || key === "wind_gauge_decimals" || key === "wind_gauge_opacity" || key === "wind_gauge_track_opacity" || key === "wind_gauge_arc_width" || key === "wind_gauge_font_size" || key === "sunflow_glow_strength" || key === "sunflow_sun_size" || key === "sunflow_arc_width" || key === "sunflow_font_scale") {
+    if (key === "min" || key === "max" || key === "value_font_size" || key === "name_font_size" || key === "stats_hours" || key === "card_scale" || key === "symbol_margin_top" || key === "symbol_margin_bottom" || key === "segment_gap" || key === "name_offset_x" || key === "name_offset_y" || key === "value_offset_x" || key === "value_offset_y" || key === "tap_confirm_open_window" || key === "fan_blade_count" || key === "wind_degree_font_size" || key === "wind_direction_font_size" || key === "wind_direction_marker_font_size" || key === "wind_outline_width" || key === "wind_arrow_size" || key === "wind_arrow_thickness" || key === "wind_sun_size" || key === "wind_gauge_min" || key === "wind_gauge_max" || key === "wind_gauge_decimals" || key === "wind_gauge_opacity" || key === "wind_gauge_track_opacity" || key === "wind_gauge_arc_width" || key === "wind_gauge_font_size" || key === "sunflow_glow_strength" || key === "sunflow_sun_size" || key === "sunflow_arc_width" || key === "sunflow_font_scale") {
       const raw = String(value ?? "").trim();
 
       // Allow typing negative/decimal values without the editor forcing "0" mid-input.
       // Home Assistant inputs may emit value-changed on each keystroke.
+      if ((key === "symbol_margin_top" || key === "symbol_margin_bottom")
+        && (raw === "-0" || raw === "0-")) {
+        target.value = "-";
+        try { target.requestUpdate?.(); } catch (_) {}
+        return;
+      }
       if (raw === "-" || raw === "+" || raw === "-," || raw === "-." || raw === "+," || raw === "+.") {
         return;
       }
@@ -15424,8 +15810,10 @@ _centerBadgePreviewNow(badgeOrObj) {
         if (!Number.isFinite(value)) value = 0;
       }
       if (key === "wind_outline_width") value = clamp(value, 0, 16);
+      if (key === "symbol_margin_top" || key === "symbol_margin_bottom") value = clamp(value, -200, 200);
       if (key === "wind_arrow_size") value = clamp(value, 25, 100);
       if (key === "wind_arrow_thickness") value = clamp(value, 40, 200);
+      if (key === "wind_sun_size") value = clamp(value, 4, 20);
       if (key === "wind_direction_marker_font_size") value = clamp(value, 8, 24);
       if (key === "wind_gauge_decimals") value = clampInt(value, 0, 3, 1);
       if (key === "wind_gauge_opacity" || key === "wind_gauge_track_opacity") value = clamp(value, 0, 100);
