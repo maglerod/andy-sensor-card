@@ -4,8 +4,8 @@ A **highly configurable** Home Assistant Lovelace card that renders **advanced S
 > Built for dashboards where “a simple icon + value” isn’t enough.
 
 
-![Preview 1_0_5](Images/winddirection.png)
-![Preview 1_0_5_2](Images/sunflow.png)
+![Preview 1_0_5](Images/winddirection2.png)
+![Preview 1_0_5_2](Images/sunflow2.png)
 ![Preview 1_0_5](Images/fan.png)
 ![Preview 1_0_5_2](Images/heatpump.png)
 ![Preview 1_0_5ws](Images/washmachine.png)
