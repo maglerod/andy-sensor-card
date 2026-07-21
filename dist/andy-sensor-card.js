@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.8.5
+ * Andy Sensor Card v1.0.8.6
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -17,7 +17,7 @@
 */
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.8.5";
+const CARD_VERSION = "1.0.8.6";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
 
 //console.info(CARD_TAGLINE);
@@ -583,11 +583,16 @@ function normalizeBadge(b) {
   if (!Number.isFinite(out.fixed_width_px) || out.fixed_width_px <= 0) out.fixed_width_px = null;
   if (out.fixed_width_px != null) out.fixed_width_px = Math.max(20, Math.min(400, Math.round(out.fixed_width_px)));
 
-  // Badge icon size (px). This is independent from the badge font size.
-  // Allows enlarging the icon without making the whole badge bigger.
+  // Badge image (optional) - use an image instead of an icon.
+  out.use_image = (typeof out.use_image === "boolean") ? out.use_image : false;
+
+  // Badge icon/image size (px). Images may be larger than icons without
+  // changing the established limits for standard or animated symbol badges.
   out.icon_size = Number(out.icon_size);
   if (!Number.isFinite(out.icon_size)) out.icon_size = 18;
-  const __icoMax = (out.style === "fan" || out.style === "heatpump") ? 260 : 96;
+  const __icoMax = out.use_image
+    ? 512
+    : ((out.style === "fan" || out.style === "heatpump") ? 260 : 96);
   out.icon_size = Math.max(6, Math.min(__icoMax, Math.round(out.icon_size)));
 
 
@@ -596,8 +601,7 @@ function normalizeBadge(b) {
   out.fan_blade_count = clampInt(out.fan_blade_count ?? 3, 2, 8, 3);
   out.fan_show_frame = (typeof out.fan_show_frame === "boolean") ? out.fan_show_frame : false;
 
-  // Badge image (optional) - use an image instead of an icon
-  out.use_image = (typeof out.use_image === "boolean") ? out.use_image : false;
+  // Badge image source and presentation.
   out.img_source = String(out.img_source || "url").trim().toLowerCase();
   out.img_source = (out.img_source === "media") ? "media" : "url";
   out.img_url = String(out.img_url || "").trim();
@@ -15285,8 +15289,11 @@ box.appendChild(svcBox);
 
     const tfIco = createEditorInput();
     tfIco.type = "number";
-    tfIco.label = "Icon size (px)";
+    tfIco.label = "Icon / image size (px)";
+    tfIco.min = "6";
     tfIco.step = "1";
+    tfIco.helperText = "Images: up to 512 px. Standard icons: up to 96 px.";
+    tfIco.persistentHelperText = true;
     tfIco.value = String(this._badgeDraft.icon_size ?? 18);
     tfIco.addEventListener("input", (e) => { e.stopPropagation(); this._badgeDraft.icon_size = Number(tfIco.value); this._applyBadgeDraftPreview(); updateAnimVisibility(); });
     grid3.appendChild(tfIco);
