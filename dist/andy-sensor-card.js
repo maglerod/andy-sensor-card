@@ -1,5 +1,5 @@
 /**
- * Andy Sensor Card v1.0.8.6
+ * Andy Sensor Card v1.0.8.7
  * ------------------------------------------------------------------
  * Developed by: Andreas ("AndyBonde") with some help from AI :).
  *
@@ -17,7 +17,7 @@
 */
 
 const CARD_NAME = "Andy Sensor Card";
-const CARD_VERSION = "1.0.8.6";
+const CARD_VERSION = "1.0.8.7";
 const CARD_TAGLINE = `${CARD_NAME} v${CARD_VERSION}`;
 
 //console.info(CARD_TAGLINE);
@@ -2370,6 +2370,39 @@ _garageComputeTargetP(entityIdOverride) {
 
     const st = this.hass.states[entityId];
 
+    // Window uses coverage semantics: 0 = blind fully up, 1 = fully down.
+    // Keep this identical to the Window SVG renderer so predictive motion and
+    // entity updates never reverse the animation direction.
+    const sym = String(this._config?.symbol || "").trim().toLowerCase();
+    if (sym === "window") {
+      const domain = String(entityId).split(".")[0] || "";
+      const parseWindowNumber = (input) => {
+        if (input == null) return null;
+        const rawValue = String(input).trim();
+        if (!rawValue) return null;
+        const match = rawValue.match(/-?\d+(?:[\.,]\d+)?/);
+        const parsed = Number(String(match ? match[0] : rawValue).replace(",", "."));
+        return Number.isFinite(parsed) ? parsed : null;
+      };
+
+      const currentPosition = parseWindowNumber(st?.attributes?.current_position);
+      if (currentPosition != null) {
+        const position = clamp01(currentPosition / 100);
+        return domain === "cover" ? (1 - position) : position;
+      }
+
+      const numericState = parseWindowNumber(st.state);
+      if (numericState != null) {
+        if (numericState >= 0 && numericState <= 1) return clamp01(numericState);
+        if (numericState >= 0 && numericState <= 100) return clamp01(numericState / 100);
+      }
+
+      const textState = String(st.state ?? "").trim().toLowerCase();
+      if (textState === "open" || textState === "opening" || textState === "on" || textState === "true") return 0;
+      if (textState === "closed" || textState === "closing" || textState === "off" || textState === "false") return 1;
+      return 0;
+    }
+
     // Prefer cover current_position if available
     let raw = null;
     const cp = st?.attributes?.current_position;
@@ -2392,16 +2425,6 @@ _garageComputeTargetP(entityIdOverride) {
 
     const range = (maxS - minS) || 1;
     let p = (raw != null && Number.isFinite(Number(raw))) ? clamp01((Number(raw) - minS) / range) : 0;
-
-    // Window symbol: main entity drives blind coverage. For cover entities, HA uses current_position as "open %" (0=closed, 100=open).
-    // Convert to "down coverage" so 0 = fully up/open, 1 = fully down/closed.
-    try {
-      const sym = String(this._config?.symbol || "").trim().toLowerCase();
-      if (sym === "window") {
-        const dom = String(entityId).split(".")[0] || "";
-        if (dom === "cover") p = 1 - p;
-      }
-    } catch (_) {}
 
     return clamp01(p);
   } catch (_) {
@@ -2428,7 +2451,10 @@ _garageApplyTransform(p, doorIndex = 1) {
   if (!g) return false;
 
   const travel = Number(g.getAttribute('data-travel') || '0');
-  const ty = -clamp01(p) * (Number.isFinite(travel) ? travel : 0);
+  const position = clamp01(p);
+  const sym = String(this._config?.symbol || '').trim().toLowerCase();
+  const travelPosition = (sym === 'window') ? (1 - position) : position;
+  const ty = -travelPosition * (Number.isFinite(travel) ? travel : 0);
   g.setAttribute('transform', `translate(0 ${ty.toFixed(2)})`);
 
   // Update the dynamic "opening" clip rect so the room/light is only visible in the opened area.
@@ -3321,6 +3347,11 @@ _onBadgeSliderChange(ev, badge) {
   _tapEntity(entityId, ev){
     try { ev?.stopPropagation?.(); } catch (e) {}
     try { ev?.preventDefault?.(); } catch (e) {}
+
+    // Browsers emit two click events for a double-click. Window has predictive
+    // motion, so the second event must not reverse the animation or service call.
+    const tapSymbol = String(this._config?.symbol || "").trim().toLowerCase();
+    if (tapSymbol === "window" && Number(ev?.detail || 0) > 1) return;
 
     const act = String(this._config?.tap_action || 'more-info');
     if (!this.hass || !entityId || act === 'none') return;
@@ -6310,9 +6341,6 @@ const root = this.renderRoot;
       const leftX = IN_X + panePad;
       const rightX = midX + panePad * 0.5;
 
-      // Blind coverage (from top down)
-      const coverH = Math.max(0, Math.min(IN_H, pDown * IN_H));
-
       const clipId = `ascWinClip_${uidBase}_${openX}`;
       const glassGradId = `ascWinGlass_${uidBase}_${openX}`;
       const glassHiId = `ascWinGlassHi_${uidBase}_${openX}`;
@@ -6321,7 +6349,7 @@ const root = this.renderRoot;
 
       const defs = `
         <clipPath id="${clipId}">
-          <rect x="${IN_X.toFixed(2)}" y="${IN_Y.toFixed(2)}" width="${IN_W.toFixed(2)}" height="${coverH.toFixed(2)}"></rect>
+          <rect x="${IN_X.toFixed(2)}" y="${IN_Y.toFixed(2)}" width="${IN_W.toFixed(2)}" height="${IN_H.toFixed(2)}"></rect>
         </clipPath>
         <linearGradient id="${glassGradId}" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0" stop-color="rgba(200,232,255,0.12)"></stop>
@@ -6454,17 +6482,17 @@ const root = this.renderRoot;
             <circle cx="0.8" cy="-12.6" r="1.0" fill="rgba(0,0,0,0.18)"></circle>
           </g>
 
-          <!-- Venetian blind (animated like garage/blind) -->
-          <g id="asc-gd-door-${this._instanceId}-${idx}" data-travel="${IN_H.toFixed(2)}" transform="translate(0 ${(-clamp01(1 - pDown) * IN_H).toFixed(2)})">
-            <g clip-path="url(#${clipId})">
+          <!-- Venetian blind. The fixed outer clip keeps all motion inside the window opening. -->
+          <g clip-path="url(#${clipId})">
+            <g id="asc-gd-door-${this._instanceId}-${idx}" data-travel="${IN_H.toFixed(2)}" transform="translate(0 ${(-clamp01(1 - pDown) * IN_H).toFixed(2)})">
               ${slats}
-            </g>
 
-            <!-- Top rail -->
-            <rect x="${(openX + TRIM).toFixed(2)}" y="${(IN_Y - 9).toFixed(2)}" width="${(OPEN_W - TRIM * 2).toFixed(2)}" height="10"
-                fill="rgba(0,0,0,0.10)"></rect>
-          <rect x="${(openX + TRIM).toFixed(2)}" y="${(IN_Y - 9).toFixed(2)}" width="${(OPEN_W - TRIM * 2).toFixed(2)}" height="10"
-                fill="none" stroke="rgba(0,0,0,0.18)" stroke-width="1"></rect>
+              <!-- Top rail -->
+              <rect x="${(openX + TRIM).toFixed(2)}" y="${(IN_Y - 9).toFixed(2)}" width="${(OPEN_W - TRIM * 2).toFixed(2)}" height="10"
+                  fill="rgba(0,0,0,0.10)"></rect>
+              <rect x="${(openX + TRIM).toFixed(2)}" y="${(IN_Y - 9).toFixed(2)}" width="${(OPEN_W - TRIM * 2).toFixed(2)}" height="10"
+                  fill="none" stroke="rgba(0,0,0,0.18)" stroke-width="1"></rect>
+            </g>
           </g>
         </g>
       `;
